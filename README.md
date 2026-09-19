@@ -17,6 +17,12 @@ Codex 桌面客户端的额度信息不够直观，查看剩余额度和重置�
 
 > 目前仅提供 Windows 10/11 x64 版本，暂不支持 macOS 与 Linux。本项目是非官方开源工具，与 OpenAI 无隶属关系，也未获得 OpenAI 背书。
 
+<p align="center">
+  <img src="docs/images/overview.png" width="900" alt="Codex Badge 胶囊与悬停额度详情卡">
+  <br>
+  <sub>界面预览 · 示例数据</sub>
+</p>
+
 ## 下载
 
 ### 推荐：免运行库版本
@@ -46,6 +52,12 @@ Codex 桌面客户端的额度信息不够直观，查看剩余额度和重置�
 - 拖动胶囊微调位置，双击恢复默认位置且保留当前主题
 - 当前用户开机启动，无需管理员权限
 - 单文件、便携运行
+
+<p align="center">
+  <img src="docs/images/themes.png" width="900" alt="Codex Badge 蓝色、浅色和深色主题">
+  <br>
+  <sub>Codex Blue · Frost Light · Graphite Dark</sub>
+</p>
 
 设置保存在 `%LOCALAPPDATA%\CodexBadge\settings.json`。托盘菜单可控制开机启动、重新定位或退出。
 
