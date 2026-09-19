@@ -39,3 +39,15 @@ function Publish-Variant {
 
 Publish-Variant -Name 'win-x64-framework-dependent' -SelfContained $false
 Publish-Variant -Name 'win-x64-self-contained' -SelfContained $true
+
+$artifacts = Join-Path $PSScriptRoot 'artifacts'
+$releaseFiles = @(
+    Join-Path $artifacts 'win-x64-framework-dependent\CodexBadge-win-x64-framework-dependent.exe'
+    Join-Path $artifacts 'win-x64-self-contained\CodexBadge-win-x64-self-contained.exe'
+)
+$checksumPath = Join-Path $artifacts 'SHA256SUMS.txt'
+$releaseFiles |
+    ForEach-Object { Get-FileHash -Algorithm SHA256 -LiteralPath $_ } |
+    ForEach-Object { "{0}  {1}" -f $_.Hash.ToLowerInvariant(), (Split-Path $_.Path -Leaf) } |
+    Set-Content -LiteralPath $checksumPath -Encoding ascii
+Write-Host "Checksums: $checksumPath"
