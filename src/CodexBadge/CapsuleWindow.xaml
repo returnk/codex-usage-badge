@@ -1,0 +1,17 @@
+<Window x:Class="CodexBadge.CapsuleWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Width="63" Height="24" WindowStyle="None" AllowsTransparency="True"
+        Background="Transparent" ResizeMode="NoResize" ShowInTaskbar="False"
+        ShowActivated="False" Topmost="False">
+    <Border x:Name="CapsuleSurface" Background="#377DFF" BorderBrush="Transparent"
+            BorderThickness="1" CornerRadius="12">
+        <TextBlock x:Name="PercentText" Text="--%" Foreground="White"
+                   FontFamily="Segoe UI" FontSize="13" FontWeight="SemiBold"
+                   HorizontalAlignment="Stretch" VerticalAlignment="Center"
+                   TextAlignment="Center" SnapsToDevicePixels="True"
+                   Typography.NumeralAlignment="Tabular"
+                   Typography.NumeralStyle="Lining"
+                   TextOptions.TextFormattingMode="Display" />
+    </Border>
+</Window>
