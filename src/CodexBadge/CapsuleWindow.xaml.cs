@@ -8,6 +8,9 @@ namespace CodexBadge;
 
 public partial class CapsuleWindow : Window
 {
+    private double? _remaining;
+    private bool _privacyMode;
+    private bool _privacyReveal;
     private bool _dragging;
     private bool _dragMoved;
     private NativeMethods.POINT _startCursor;
@@ -31,8 +34,17 @@ public partial class CapsuleWindow : Window
         LostMouseCapture += OnLostMouseCapture;
     }
 
-    public void SetPercent(double? remaining) =>
-        PercentText.Text = remaining is null ? "--%" : $"{Math.Round(remaining.Value):0}%";
+    public void SetPercent(double? remaining)
+    {
+        _remaining = remaining;
+        UpdatePercentText();
+    }
+
+    public void SetPrivacyReveal(bool reveal)
+    {
+        _privacyReveal = reveal;
+        UpdatePercentText();
+    }
 
     public void ApplyTheme(CapsuleTheme theme)
     {
@@ -40,12 +52,18 @@ public partial class CapsuleWindow : Window
         {
             CapsuleTheme.FrostLight => ("#FFF4F8FF", "#FF245AA8", "#66377DFF"),
             CapsuleTheme.GraphiteDark => ("#FF25272C", "#FFFFFFFF", "#50377DFF"),
+            CapsuleTheme.Privacy => ("#FF6B7280", "#FFFFFFFF", "#406B7280"),
             _ => ("#FF377DFF", "#FFFFFFFF", "#00377DFF"),
         };
+        _privacyMode = theme == CapsuleTheme.Privacy;
         CapsuleSurface.Background = Brush(background);
         CapsuleSurface.BorderBrush = Brush(border);
         PercentText.Foreground = Brush(foreground);
+        UpdatePercentText();
     }
+
+    private void UpdatePercentText() =>
+        PercentText.Text = CapsuleDisplay.FormatPercent(_remaining, _privacyMode, _privacyReveal);
 
     private static SolidColorBrush Brush(string value) =>
         new((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(value));

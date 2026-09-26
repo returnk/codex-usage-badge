@@ -22,7 +22,12 @@ var tests = new (string Name, Action Run)[]
     ("Absolute drag position follows the cursor without accumulated drift", AbsoluteDragPositionFollowsCursor),
     ("New settings default to the light theme", NewSettingsDefaultToLightTheme),
     ("Position reset preserves startup preference and theme", PositionResetPreservesPreferences),
-    ("Theme wheel cycles through three themes", ThemeWheelCycles),
+    ("Theme wheel includes a privacy mode", ThemeWheelCycles),
+    ("Privacy mode masks quota until hover", PrivacyModeMasksQuotaUntilHover),
+    ("Live quota anchor overrides the fixed sidebar", LiveQuotaAnchorOverridesSidebar),
+    ("Quota anchor rejects this application's controls", QuotaAnchorRejectsOwnProcess),
+    ("Sidebar anchor rejects the conversation composer", SidebarAnchorRejectsConversationComposer),
+    ("Sidebar container bottom controls vertical placement", SidebarContainerBottomControlsVerticalPlacement),
     ("Progress color bands honor twenty and forty percent boundaries", ProgressColorBandsHonorBoundaries),
     ("Previous layout migrates to the new default position", LegacySettingsMigratePosition),
     ("Legacy product settings migrate without overwriting the new file", LegacyProductSettingsMigrateOnce),
@@ -321,8 +326,60 @@ static void ThemeWheelCycles()
 {
     Equal(CapsuleTheme.FrostLight, ThemeMath.Cycle(CapsuleTheme.CodexBlue, 120));
     Equal(CapsuleTheme.GraphiteDark, ThemeMath.Cycle(CapsuleTheme.FrostLight, 120));
-    Equal(CapsuleTheme.CodexBlue, ThemeMath.Cycle(CapsuleTheme.GraphiteDark, 120));
-    Equal(CapsuleTheme.GraphiteDark, ThemeMath.Cycle(CapsuleTheme.CodexBlue, -120));
+    var privacy = ThemeMath.Cycle(CapsuleTheme.GraphiteDark, 120);
+    Equal("Privacy", privacy.ToString());
+    Equal(CapsuleTheme.CodexBlue, ThemeMath.Cycle(privacy, 120));
+    Equal("Privacy", ThemeMath.Cycle(CapsuleTheme.CodexBlue, -120).ToString());
+}
+
+static void PrivacyModeMasksQuotaUntilHover()
+{
+    var type = typeof(QuotaVisuals).Assembly.GetType("CodexBadge.Core.CapsuleDisplay");
+    True(type is not null, "CapsuleDisplay must provide privacy-safe text formatting.");
+    var format = type!.GetMethod("FormatPercent");
+    True(format is not null, "CapsuleDisplay.FormatPercent must exist.");
+
+    Equal("••%", format!.Invoke(null, [83d, true, false]) as string);
+    Equal("83%", format.Invoke(null, [83d, true, true]) as string);
+    Equal("83%", format.Invoke(null, [83d, false, false]) as string);
+}
+
+static void LiveQuotaAnchorOverridesSidebar()
+{
+    var method = typeof(CapsulePlacement).GetMethod("CalculateFromAnchor");
+    True(method is not null, "CapsulePlacement.CalculateFromAnchor must exist.");
+    var point = (CapsulePoint)method!.Invoke(null, [
+        512, 900, 1d, 63d, 24d, 0d, 0d
+    ])!;
+
+    Equal(447, point.X);
+    Equal(866, point.Y);
+}
+
+static void QuotaAnchorRejectsOwnProcess()
+{
+    True(!QuotaAnchorCandidate.IsExternalProcess(42, 42), "The capsule must not anchor to its own percentage text.");
+    True(QuotaAnchorCandidate.IsExternalProcess(43, 42), "A Codex control from another process is valid.");
+}
+
+static void SidebarAnchorRejectsConversationComposer()
+{
+    True(SidebarAnchorCandidate.IsContainer(0, 1200, 900, 1d, 0, 504, 900), "The left sidebar container is valid.");
+    True(SidebarAnchorCandidate.IsContainer(0, 1200, 900, 1d, 0, 344, 900), "The compact sidebar container is valid.");
+    True(!SidebarAnchorCandidate.IsContainer(0, 900, 900, 1d, 397, 900, 900), "The conversation composer must be rejected.");
+    True(!SidebarAnchorCandidate.IsContainer(0, 900, 900, 1d, 0, 900, 900), "The full Codex window must be rejected.");
+    Equal(343, SidebarAnchorCandidate.ChooseOuterRight(332, 343));
+    True(
+        SidebarAnchorCandidate.IsContainer(-9, 2569, 1389, 1.25d, -1, 343, 1382),
+        "The real maximized 125% DPI sidebar bounds must be accepted without scaling UIA width twice.");
+}
+
+static void SidebarContainerBottomControlsVerticalPlacement()
+{
+    var point = CapsulePlacement.CalculateFromContainer(
+        344, 860, 1d, 63d, 24d, 0d, 0d);
+    Equal(279, point.X);
+    Equal(826, point.Y);
 }
 
 static void ProgressColorBandsHonorBoundaries()

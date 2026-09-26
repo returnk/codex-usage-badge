@@ -6,17 +6,13 @@ $project = Join-Path $PSScriptRoot 'src\CodexBadge\CodexBadge.csproj'
 $nugetConfig = Join-Path $PSScriptRoot 'NuGet.Config'
 
 function Publish-Variant {
-    param(
-        [string]$Name,
-        [bool]$SelfContained
-    )
-
+    param([string]$Name)
     $output = Join-Path $PSScriptRoot "artifacts\$Name"
     $arguments = @(
         'publish', $project,
         '--configuration', 'Release',
         '--runtime', 'win-x64',
-        '--self-contained', $SelfContained.ToString().ToLowerInvariant(),
+        '--self-contained', 'false',
         '--configfile', $nugetConfig,
         '--output', $output,
         '-p:PublishSingleFile=true',
@@ -24,26 +20,23 @@ function Publish-Variant {
         '-p:DebugSymbols=false'
     )
 
-    if ($SelfContained) {
-        $arguments += '-p:IncludeNativeLibrariesForSelfExtract=true'
-    }
-
     & $dotnet @arguments
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
     $source = Join-Path $output 'CodexBadge.exe'
     $destination = Join-Path $output "CodexBadge-$Name.exe"
+    if (Test-Path -LiteralPath $destination) {
+        Remove-Item -LiteralPath $destination -Force
+    }
     Move-Item -LiteralPath $source -Destination $destination -Force
     Write-Host "Published: $destination"
 }
 
-Publish-Variant -Name 'win-x64-framework-dependent' -SelfContained $false
-Publish-Variant -Name 'win-x64-self-contained' -SelfContained $true
+Publish-Variant -Name 'win-x64-framework-dependent'
 
 $artifacts = Join-Path $PSScriptRoot 'artifacts'
 $releaseFiles = @(
     Join-Path $artifacts 'win-x64-framework-dependent\CodexBadge-win-x64-framework-dependent.exe'
-    Join-Path $artifacts 'win-x64-self-contained\CodexBadge-win-x64-self-contained.exe'
 )
 $checksumPath = Join-Path $artifacts 'SHA256SUMS.txt'
 $releaseFiles |

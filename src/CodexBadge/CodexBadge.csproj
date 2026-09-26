@@ -12,6 +12,7 @@
     <ApplicationIcon>Assets\CodexBadge.ico</ApplicationIcon>
     <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <Version>0.2.0</Version>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\CodexBadge.Core\CodexBadge.Core.csproj" />

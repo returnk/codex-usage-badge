@@ -131,11 +131,12 @@ public enum CapsuleTheme
     CodexBlue,
     FrostLight,
     GraphiteDark,
+    Privacy,
 }
 
 public static class ThemeMath
 {
-    private const int ThemeCount = 3;
+    private const int ThemeCount = 4;
 
     public static CapsuleTheme Cycle(CapsuleTheme current, int wheelDelta)
     {
@@ -143,6 +144,14 @@ public static class ThemeMath
         var direction = Math.Sign(wheelDelta);
         return (CapsuleTheme)(((int)current + direction + ThemeCount) % ThemeCount);
     }
+}
+
+public static class CapsuleDisplay
+{
+    public static string FormatPercent(double? remaining, bool privacyMode, bool reveal) =>
+        privacyMode && !reveal
+            ? "••%"
+            : remaining is null ? "--%" : $"{Math.Round(remaining.Value):0}%";
 }
 
 public enum QuotaProgressBand
@@ -221,6 +230,57 @@ public static class CapsulePlacement
         return new CapsulePoint(x, y);
     }
 
+    public static CapsulePoint CalculateFromAnchor(
+        int anchorRight,
+        int frameBottom,
+        double scale,
+        double capsuleWidth,
+        double capsuleHeight,
+        double offsetX,
+        double offsetY)
+    {
+        scale = double.IsFinite(scale) && scale > 0 ? scale : 1;
+        var x = anchorRight - (int)Math.Round((RightInset + capsuleWidth - offsetX) * scale);
+        var y = frameBottom - (int)Math.Round((BottomInsetToCapsuleBottom + capsuleHeight - offsetY) * scale);
+        return new CapsulePoint(x, y);
+    }
+
+    public static CapsulePoint CalculateFromContainer(
+        int containerRight,
+        int containerBottom,
+        double scale,
+        double capsuleWidth,
+        double capsuleHeight,
+        double offsetX,
+        double offsetY) =>
+        CalculateFromAnchor(
+            containerRight, containerBottom, scale,
+            capsuleWidth, capsuleHeight, offsetX, offsetY);
+
+}
+
+public static class QuotaAnchorCandidate
+{
+    public static bool IsExternalProcess(int candidateProcessId, int ownProcessId) =>
+        candidateProcessId > 0 && candidateProcessId != ownProcessId;
+}
+
+public static class SidebarAnchorCandidate
+{
+    public static bool IsContainer(
+        int frameLeft, int frameRight, int frameBottom, double scale,
+        double left, double right, double bottom)
+    {
+        scale = double.IsFinite(scale) && scale > 0 ? scale : 1;
+        var width = right - left;
+        return Math.Abs(left - frameLeft) <= 8 * scale &&
+               width >= 280 && width <= 800 &&
+               right <= frameRight - 260 * scale &&
+               bottom >= frameBottom - 8 * scale && bottom <= frameBottom + 4 * scale;
+    }
+
+    public static int ChooseOuterRight(int currentRight, int candidateRight) =>
+        Math.Max(currentRight, candidateRight);
 }
 
 public sealed class SettingsStore

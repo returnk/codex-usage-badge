@@ -25,30 +25,24 @@ Codex 桌面客户端的额度信息不够直观，查看剩余额度和重置�
 
 ## 下载
 
-### 推荐：免运行库版本
-
-[**下载 CodexBadge-win-x64-self-contained.exe**](https://github.com/returnk/codex-usage-badge/releases/latest/download/CodexBadge-win-x64-self-contained.exe) · 约 165 MiB · 无需预装 .NET
-
-### 小体积版本
-
 [**下载 CodexBadge-win-x64-framework-dependent.exe**](https://github.com/returnk/codex-usage-badge/releases/latest/download/CodexBadge-win-x64-framework-dependent.exe) · 约 0.30 MiB · 需要 [.NET 10 Desktop Runtime x64](https://dotnet.microsoft.com/download/dotnet/10.0)
 
 [查看全部版本与 SHA-256 校验文件](https://github.com/returnk/codex-usage-badge/releases/latest)
 
 ## 30 秒开始使用
 
-1. 下载推荐的 Self-contained 版本并运行。
-2. 打开已登录的 Codex Windows 桌面客户端。
-3. 胶囊会自动出现在 Codex 底部；软件没有主窗口，通过系统托盘管理。
+1. 安装 [.NET 10 Desktop Runtime x64](https://dotnet.microsoft.com/download/dotnet/10.0)。
+2. 下载并运行 `CodexBadge-win-x64-framework-dependent.exe`。
+3. 打开已登录的 Codex Windows 桌面客户端；胶囊会自动出现在底部，软件通过系统托盘管理。
 
 这是未签名的便携程序，Windows 首次运行时可能显示未知发布者提示。你可以在 Release 页面下载 `SHA256SUMS.txt` 核对文件完整性。
 
 ## 功能
 
-- 自动跟随 Codex 窗口；Codex 最小化或关闭时自动隐藏
+- 自动跟随 Codex 窗口、侧栏宽度和常见 DPI；Codex 最小化或关闭时自动隐藏
 - 显示 5 小时额度，悬停查看完整详情
 - 5 小时进度条按额度显示绿色、黄色或橙红色
-- 鼠标滚轮切换蓝色、浅色和深色主题
+- 鼠标滚轮切换蓝色、浅色、深色和隐私模式；隐私模式仅在悬停时显示百分比
 - 拖动胶囊微调位置，双击恢复默认位置且保留当前主题
 - 当前用户开机启动，无需管理员权限
 - 单文件、便携运行
@@ -71,9 +65,9 @@ Codex 桌面客户端的额度信息不够直观，查看剩余额度和重置�
 
 确认 Codex 已登录，且本机 Codex CLI 可以正常运行。如果无法自动找到 CLI，可将环境变量 `CODEX_BADGE_CLI` 设置为 `codex.exe` 的完整路径。
 
-**小体积版本无法启动**
+**程序无法启动**
 
-安装 [.NET 10 Desktop Runtime x64](https://dotnet.microsoft.com/download/dotnet/10.0)，或改用 Self-contained 版本。
+安装 [.NET 10 Desktop Runtime x64](https://dotnet.microsoft.com/download/dotnet/10.0)，注意需要 Desktop Runtime x64，而不是仅安装普通 .NET Runtime。
 
 ## 隐私
 

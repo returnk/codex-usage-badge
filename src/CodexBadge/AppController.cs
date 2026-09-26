@@ -188,6 +188,13 @@ internal sealed class AppController : IDisposable
         var point = CapsulePlacement.Calculate(
             frame.Left, frame.Right, frame.Bottom, scale,
             CapsuleWidth, CapsuleHeight, _settings.OffsetX, _settings.OffsetY);
+        if (NativeMethods.TryGetToolbarAnchor(
+                _owner, frame, scale, out var anchorRight, out var anchorBottom))
+        {
+            point = CapsulePlacement.CalculateFromContainer(
+                anchorRight, anchorBottom, scale,
+                CapsuleWidth, CapsuleHeight, _settings.OffsetX, _settings.OffsetY);
+        }
         var x = point.X;
         var y = point.Y;
         var capsuleHwnd = new WindowInteropHelper(_capsule).Handle;
@@ -223,6 +230,8 @@ internal sealed class AppController : IDisposable
         if (isCapsule) _capsuleHovered = hovering;
         else _detailHovered = hovering;
 
+        UpdatePrivacyReveal();
+
         if (_dragging) return;
 
         if (hovering)
@@ -244,6 +253,7 @@ internal sealed class AppController : IDisposable
         if (_capsuleHovered || _detailHovered || !_detailVisible) return;
         _detail.Hide();
         _detailVisible = false;
+        UpdatePrivacyReveal();
     }
 
     private void ShowDetail()
@@ -272,7 +282,11 @@ internal sealed class AppController : IDisposable
     {
         _capsule.ApplyTheme(_settings.Theme);
         _detail.ApplyTheme(_settings.Theme);
+        UpdatePrivacyReveal();
     }
+
+    private void UpdatePrivacyReveal() =>
+        _capsule.SetPrivacyReveal(_capsuleHovered || _detailHovered || _detailVisible);
 
     private void ResetPosition()
     {

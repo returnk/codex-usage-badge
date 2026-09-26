@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Runtime.InteropServices;
+using System.Windows.Automation;
 using System.Windows.Interop;
 using CodexBadge.Core;
 using Microsoft.Win32;
@@ -18,6 +19,13 @@ internal static class NativeMethods
     internal const uint SwpNoSize = 0x0001;
     internal const int SwShowNoActivate = 4;
     private const int DwmwaExtendedFrameBounds = 9;
+    private static readonly object AnchorGate = new();
+    private static nint _anchorOwner;
+    private static AutomationElement? _toolbarAnchor;
+    private static int _toolbarAnchorRight;
+    private static int _toolbarAnchorBottom;
+    private static long _nextAnchorProbe;
+    private static int _anchorProbeRunning;
 
     internal static readonly nint HwndTop = 0;
     internal static readonly nint HwndTopMost = -1;
@@ -99,6 +107,127 @@ internal static class NativeMethods
     }
 
     internal static bool TryGetWindowBounds(nint hwnd, out RECT rect) => GetWindowRect(hwnd, out rect);
+
+    internal static bool TryGetToolbarAnchor(
+        nint hwnd, RECT frame, double scale,
+        out int right, out int bottom)
+    {
+        lock (AnchorGate)
+        {
+            if (_anchorOwner != hwnd)
+            {
+                _anchorOwner = hwnd;
+                _toolbarAnchor = null;
+                _toolbarAnchorRight = 0;
+                _toolbarAnchorBottom = 0;
+                _nextAnchorProbe = 0;
+            }
+            right = _toolbarAnchorRight;
+            bottom = _toolbarAnchorBottom;
+        }
+
+        if (Environment.TickCount64 >= Interlocked.Read(ref _nextAnchorProbe) &&
+            Interlocked.CompareExchange(ref _anchorProbeRunning, 1, 0) == 0)
+        {
+            Interlocked.Exchange(ref _nextAnchorProbe, Environment.TickCount64 + 750);
+            _ = Task.Run(() => ProbeToolbarAnchor(hwnd, frame, scale));
+        }
+        return right > 0 && bottom > 0;
+    }
+
+    private static void ProbeToolbarAnchor(nint hwnd, RECT frame, double scale)
+    {
+        try
+        {
+            AutomationElement? cached;
+            lock (AnchorGate) cached = _anchorOwner == hwnd ? _toolbarAnchor : null;
+            if (TryReadToolbarAnchor(cached, frame, scale, out var cachedRight, out var cachedBottom))
+            {
+                StoreToolbarAnchor(hwnd, cached, cachedRight, cachedBottom);
+                return;
+            }
+
+            var root = AutomationElement.FromHandle(hwnd);
+            var controls = root.FindAll(TreeScope.Descendants, new OrCondition(
+                new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Button),
+                new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Text)));
+            AutomationElement? best = null;
+            foreach (AutomationElement element in controls)
+            {
+                if (!QuotaAnchorCandidate.IsExternalProcess(element.Current.ProcessId, Environment.ProcessId)) continue;
+                if (!IsVoiceControl(element.Current.Name)) continue;
+                var parent = element;
+                var outerRight = 0;
+                var outerBottom = 0;
+                for (var depth = 0; depth < 8 && parent is not null; depth++)
+                {
+                    var bounds = parent.Current.BoundingRectangle;
+                    if (IsSidebarContainer(bounds, frame, scale))
+                    {
+                        best = parent;
+                        outerRight = SidebarAnchorCandidate.ChooseOuterRight(
+                            outerRight, (int)Math.Round(bounds.Right));
+                        outerBottom = (int)Math.Round(bounds.Bottom);
+                    }
+                    parent = TreeWalker.RawViewWalker.GetParent(parent);
+                }
+                if (best is not null)
+                {
+                    StoreToolbarAnchor(hwnd, best, outerRight, outerBottom);
+                    return;
+                }
+            }
+
+            StoreToolbarAnchor(hwnd, null, 0, 0);
+        }
+        catch (ElementNotAvailableException) { }
+        catch (InvalidOperationException) { }
+        catch (COMException) { }
+        finally { Interlocked.Exchange(ref _anchorProbeRunning, 0); }
+    }
+
+    private static void StoreToolbarAnchor(
+        nint hwnd, AutomationElement? element, int right, int bottom)
+    {
+        lock (AnchorGate)
+        {
+            if (_anchorOwner != hwnd) return;
+            _toolbarAnchor = element;
+            _toolbarAnchorRight = right;
+            _toolbarAnchorBottom = bottom;
+        }
+    }
+
+    private static bool TryReadToolbarAnchor(
+        AutomationElement? element, RECT frame, double scale,
+        out int right, out int bottom)
+    {
+        right = 0;
+        bottom = 0;
+        if (element is null) return false;
+        try
+        {
+            if (!QuotaAnchorCandidate.IsExternalProcess(element.Current.ProcessId, Environment.ProcessId)) return false;
+            var bounds = element.Current.BoundingRectangle;
+            if (!IsSidebarContainer(bounds, frame, scale)) return false;
+            right = (int)Math.Round(bounds.Right);
+            bottom = (int)Math.Round(bounds.Bottom);
+            return true;
+        }
+        catch (ElementNotAvailableException) { return false; }
+        catch (InvalidOperationException) { return false; }
+        catch (COMException) { return false; }
+    }
+
+    private static bool IsVoiceControl(string? name) =>
+        !string.IsNullOrWhiteSpace(name) &&
+        (name.Contains("语音", StringComparison.OrdinalIgnoreCase) ||
+         name.Contains("Voice", StringComparison.OrdinalIgnoreCase));
+
+    private static bool IsSidebarContainer(System.Windows.Rect bounds, RECT frame, double scale) =>
+        !bounds.IsEmpty && SidebarAnchorCandidate.IsContainer(
+            frame.Left, frame.Right, frame.Bottom, scale,
+            bounds.Left, bounds.Right, bounds.Bottom);
 
     internal static IReadOnlyList<nint> FindCodexWindows()
     {

@@ -67,7 +67,7 @@ public partial class DetailWindow : Window
 
     public void ApplyTheme(CapsuleTheme theme)
     {
-        var dark = theme == CapsuleTheme.GraphiteDark ||
+        var dark = theme is CapsuleTheme.GraphiteDark or CapsuleTheme.Privacy ||
                    (theme == CapsuleTheme.CodexBlue && ThemeReader.IsDarkMode());
         var background = theme == CapsuleTheme.FrostLight ? "#FFF4F8FF" : dark ? "#FF25272C" : "#FFFFFFFF";
         Card.Background = new SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(background));
@@ -94,10 +94,10 @@ public partial class DetailWindow : Window
 
     private void UpdateCreditText()
     {
-        CreditCountRun.Text = _creditCount?.ToString() ?? "--";
-        CreditCountRun.Foreground = _creditCount is > 0 ? _foreground : _muted;
-        CreditCountRun.FontWeight = _creditCount is > 0 ? FontWeights.SemiBold : FontWeights.Normal;
-        CreditSuffixRun.Foreground = _muted;
+        CreditCountText.Text = _creditCount?.ToString() ?? "--";
+        CreditCountText.Foreground = _creditCount is > 0 ? _foreground : _muted;
+        CreditCountText.FontWeight = _creditCount is > 0 ? FontWeights.SemiBold : FontWeights.Normal;
+        CreditSuffixText.Foreground = _muted;
     }
 
     private void SetProgressBrush(double? remaining, bool blocked)

@@ -70,10 +70,12 @@
 
             <Grid Margin="0,6,0,0">
                 <TextBlock x:Name="WeeklyResetText" FontFamily="Segoe UI" FontSize="11.5" />
-                <TextBlock x:Name="CreditText" FontFamily="Segoe UI" FontSize="11.5"
-                           HorizontalAlignment="Right">
-                    <Run x:Name="CreditCountRun" Text="--" /><Run x:Name="CreditSuffixRun" Text="次重置机会" />
-                </TextBlock>
+                <StackPanel x:Name="CreditText" Orientation="Horizontal" HorizontalAlignment="Right">
+                    <TextBlock x:Name="CreditCountText" Text="--" FontFamily="Segoe UI"
+                               FontSize="11.5" Margin="0,0,3,0" />
+                    <TextBlock x:Name="CreditSuffixText" Text="次重置机会" FontFamily="Segoe UI"
+                               FontSize="11.5" />
+                </StackPanel>
             </Grid>
         </StackPanel>
     </Border>
