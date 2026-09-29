@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="0 0 96 96" role="img" aria-labelledby="title">
+  <title id="title">余量 · Codex Badge</title>
+  <defs>
+    <linearGradient id="bg" x2="1" y2="1"><stop stop-color="#263c62"/><stop offset="1" stop-color="#17263f"/></linearGradient>
+    <linearGradient id="pill" x2="1" y2="1"><stop stop-color="#fff"/><stop offset="1" stop-color="#e1ecf8"/></linearGradient>
+  </defs>
+  <rect width="96" height="96" rx="26" fill="url(#bg)"/>
+  <rect x="13" y="27" width="70" height="34" rx="17" fill="url(#pill)"/>
+  <text x="46" y="51" text-anchor="middle" font-family="Segoe UI,Arial,sans-serif" font-size="23" font-weight="600" fill="#245aa8">68<tspan font-size="13">%</tspan></text>
+  <rect x="28" y="70" width="40" height="4" rx="2" fill="#ffffff" opacity=".16"/>
+  <rect x="28" y="70" width="27" height="4" rx="2" fill="#54d77c"/>
+</svg>

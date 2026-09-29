@@ -1,6 +1,6 @@
-# Codex Badge for Windows (Tauri 2)
+# 余量 · Codex Badge — Tauri development
 
-中文展示名：**余量 · Codex Badge**。当前公开版本为 **v0.3.0-beta.1**，属于 Tauri 重构测试版，不替代旧 WPF 稳定版。下载、迁移和已知问题见 [发布说明](docs/releases/v0.3.0-beta.1.md)。
+当前产品实现：**Tauri 2 + Rust + 系统 WebView2**。当前公开版本为 **v0.3.0-beta.1**（预发布）。下载与日常使用见[项目首页](../README.md)；本页面向开发者，记录构建、诊断与验证信息。
 
 Tauri 2 + Rust + system WebView2 implementation for Windows 10/11 x64. This directory is independent of the WPF source in `src/CodexBadge`.
 

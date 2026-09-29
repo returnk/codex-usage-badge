@@ -1,101 +1,81 @@
 <p align="center">
-  <img src="src/CodexBadge/Assets/CodexBadge.png" width="88" alt="Codex Badge icon">
+  <img src="docs/images/brand.svg" width="72" alt="余量 · Codex Badge">
 </p>
 
-<h1 align="center">Codex Usage Badge for Windows</h1>
+<h1 align="center">余量 · Codex Badge</h1>
 
-<p align="center">在 Codex 窗口中直接查看 5 小时和每周剩余额度。</p>
+<p align="center"><strong>Codex 还剩多少，一眼就知道。</strong></p>
+<p align="center">Windows 上的 Codex 额度胶囊 · Codex usage monitor for Windows</p>
 
 <p align="center">
-  <a href="https://github.com/returnk/codex-usage-badge/releases/latest"><img src="https://img.shields.io/github/v/release/returnk/codex-usage-badge?label=release" alt="Latest release"></a>
-  <a href="https://github.com/returnk/codex-usage-badge/actions/workflows/ci.yml"><img src="https://github.com/returnk/codex-usage-badge/actions/workflows/ci.yml/badge.svg" alt="Build status"></a>
-  <img src="https://img.shields.io/badge/Windows-10%20%7C%2011-3A83F7" alt="Windows 10 and 11">
-  <a href="LICENSE"><img src="https://img.shields.io/github/license/returnk/codex-usage-badge" alt="MIT license"></a>
+  <a href="https://github.com/returnk/codex-usage-badge/releases/tag/v0.3.0-beta.1"><img src="https://img.shields.io/badge/v0.3.0--beta.1-preview-2879E7" alt="v0.3.0-beta.1 预发布"></a>
+  <img src="https://img.shields.io/badge/Windows-10%20%2F%2011-1B2738" alt="Windows 10 / 11 x64">
+  <img src="https://img.shields.io/badge/Tauri-2-24C8DB" alt="Tauri 2">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-34C759" alt="MIT license"></a>
 </p>
 
-Codex 桌面客户端的额度信息不够直观，查看剩余额度和重置时间容易打断当前操作。**Codex Badge** 会跟随 Codex 窗口，在原额度位置直接展示 5 小时剩余百分比；鼠标悬停即可查看重置时间、本周剩余额度和重置机会。
+<p align="center">
+  <a href="#下载">下载</a> · <a href="#开始使用">开始使用</a> · <a href="#日常操作">日常操作</a> · <a href="https://github.com/returnk/codex-usage-badge/issues">反馈</a> · <a href="docs/README.en.md">English</a>
+</p>
 
-> 目前仅提供 Windows 10/11 x64 版本，暂不支持 macOS 与 Linux。本项目是非官方开源工具，与 OpenAI 无隶属关系，也未获得 OpenAI 背书。
+把剩余额度留在眼前，把注意力留给工作。**余量**贴合 Codex 侧栏，显示 5 小时剩余百分比；悬停展开本周剩余、重置时间和重置机会，不必切换页面。
 
 <p align="center">
-  <img src="docs/images/overview.png" width="900" alt="Codex Badge 胶囊与悬停额度详情卡">
+  <img src="docs/images/tauri-preview.svg" width="1100" alt="余量 Tauri 界面示意：毛玻璃、跟随系统浅色、跟随系统深色；显示 5 小时和每周剩余额度、重置时间与重置机会">
   <br>
-  <sub>界面预览 · 示例数据</sub>
+  <sub>当前界面风格示意 · 示例数据 · 两个主题选项：毛玻璃 / 跟随系统</sub>
 </p>
 
 ## 下载
 
-### Tauri 重构测试版：余量 · Codex Badge
+**v0.3.0-beta.1** · Windows 10 / 11 x64 · 当前预发布版本
 
-[**v0.3.0-beta.1 测试版下载与已知问题**](https://github.com/returnk/codex-usage-badge/releases/tag/v0.3.0-beta.1) · Windows 10/11 x64 · 提供安装器与便携 ZIP，需要 Microsoft Edge WebView2 Runtime，不需要 .NET。
+| 安装版 · 推荐 | 便携版 |
+| --- | --- |
+| [下载安装器](https://github.com/returnk/codex-usage-badge/releases/download/v0.3.0-beta.1/CodexBadge-v0.3.0-beta.1-windows-x64-setup.exe) | [下载 ZIP](https://github.com/returnk/codex-usage-badge/releases/download/v0.3.0-beta.1/CodexBadge-v0.3.0-beta.1-windows-x64-portable.zip) |
+| 按提示安装后运行 | 解压后运行 `codex-badge-tauri.exe` |
 
-新实现位于 [CodexBadge.Tauri](CodexBadge.Tauri/README.md)。只有两个可选主题：**毛玻璃 / 跟随系统明暗**。已实现随 Codex 启停、独立置顶位置、两种模式右键菜单和重置机会详情；真实退出/重开资源释放、快速悬停花屏和安装升级仍需更多实测。本版不是稳定版，也不宣称原生 Windows 亚克力效果或低于旧版的运行内存。
+[更新说明](https://github.com/returnk/codex-usage-badge/releases/tag/v0.3.0-beta.1) · [SHA-256 校验](https://github.com/returnk/codex-usage-badge/releases/download/v0.3.0-beta.1/SHA256SUMS.txt)
 
-旧版与新版不能同时运行；请先关闭旧版开机启动，再从旧版托盘退出，然后运行新版。两者设置文件独立，本版不自动导入旧 WPF 设置。新版监听程序必须运行，才能在 Codex 打开时自动显示；从托盘退出后不会自动跟随。
+无需 .NET。需要 **WebView2 Runtime**、已登录的 Codex Windows 桌面客户端和可用的 Codex CLI；安装器可引导下载 WebView2。程序尚未签名，首次运行可能出现 Windows 安全提示，请确认来自本仓库。
 
-### 旧 WPF 稳定版 v0.2.0
+## 开始使用
 
-[**下载 CodexBadge-win-x64-framework-dependent.exe**](https://github.com/returnk/codex-usage-badge/releases/latest/download/CodexBadge-win-x64-framework-dependent.exe) · 约 0.30 MiB · 需要 [.NET 10 Desktop Runtime x64](https://dotnet.microsoft.com/download/dotnet/10.0)
+1. 安装或解压，运行余量。
+2. 打开已登录的 Codex，胶囊自动出现。
+3. 右键胶囊或托盘图标，可开启**开机启动**和**置顶模式**。
 
-[查看全部版本与 SHA-256 校验文件](https://github.com/returnk/codex-usage-badge/releases/latest)
+余量在后台运行时，会随 Codex 打开而显示、退出而收起；从托盘选择“退出”后，需要手动重新启动余量。
 
-## 30 秒开始使用
+## 日常操作
 
-以下使用说明、功能与截图对应旧 WPF 稳定版；Tauri 测试版请阅读上方链接。
+| 操作 | 效果 |
+| --- | --- |
+| 悬停胶囊 | 展开 5 小时、本周剩余和重置时间 |
+| 点击“查看” | 查看重置机会的到期时间（有可用详情时显示） |
+| 滚动鼠标滚轮 | 切换**毛玻璃 / 跟随系统**；系统主题自动适配明暗 |
+| 拖动胶囊 | 调整位置，普通模式和置顶模式分别记忆 |
+| 右键胶囊或托盘 | 开机启动、置顶模式、重新定位、退出 |
+| 双击胶囊 | 普通模式恢复位置；置顶模式保持位置 |
 
-1. 安装 [.NET 10 Desktop Runtime x64](https://dotnet.microsoft.com/download/dotnet/10.0)。
-2. 下载并运行 `CodexBadge-win-x64-framework-dependent.exe`。
-3. 打开已登录的 Codex Windows 桌面客户端；胶囊会自动出现在底部，软件通过系统托盘管理。
-
-这是未签名的便携程序，Windows 首次运行时可能显示未知发布者提示。你可以在 Release 页面下载 `SHA256SUMS.txt` 核对文件完整性。
-
-## 功能
-
-- 自动跟随 Codex 窗口、侧栏宽度和常见 DPI；Codex 最小化或关闭时自动隐藏
-- 显示 5 小时额度，悬停查看完整详情
-- 5 小时进度条按额度显示绿色、黄色或橙红色
-- 鼠标滚轮切换蓝色、浅色、深色和隐私模式；隐私模式仅在悬停时显示百分比
-- 拖动胶囊微调位置，双击恢复默认位置且保留当前主题
-- 当前用户开机启动，无需管理员权限
-- 单文件、便携运行
-
-<p align="center">
-  <img src="docs/images/themes.png" width="900" alt="Codex Badge 蓝色、浅色和深色主题">
-  <br>
-  <sub>Codex Blue · Frost Light · Graphite Dark</sub>
-</p>
-
-设置保存在 `%LOCALAPPDATA%\CodexBadge\settings.json`。托盘菜单可控制开机启动、重新定位或退出。
+普通模式随 Codex 最小化隐藏；置顶模式可在 Codex 最小化时继续显示。Codex 退出后，两种模式都会收起。
 
 ## 常见问题
 
-**胶囊没有显示**
+**没有看到胶囊？** 确认余量正在运行、Codex 主窗口已经打开。普通模式下，Codex 最小化时不会显示；也可以右键托盘选择“重新定位”。
 
-确认 Codex 主窗口已经打开且没有最小化。仍未显示时，可从托盘菜单选择“重新定位”。
+**显示 `--%`？** 确认 Codex 已登录，且 Codex CLI 可用。找不到 CLI 时，可将环境变量 `CODEX_BADGE_CLI` 设置为 `codex.exe` 的完整路径。
 
-**胶囊显示 `--%` 或暂时无法读取额度**
+**更新或移动便携版？** 先关闭开机启动，再退出正在运行的版本；运行新版本后按需重新开启。开机启动会记住程序所在路径。
 
-确认 Codex 已登录，且本机 Codex CLI 可以正常运行。如果无法自动找到 CLI，可将环境变量 `CODEX_BADGE_CLI` 设置为 `codex.exe` 的完整路径。
+本版仍在测试中，快速来回悬停可能短暂花屏；安装升级、显示缩放及跨屏行为仍在持续验证。[查看发布说明](CodexBadge.Tauri/docs/releases/v0.3.0-beta.1.md)
 
-**程序无法启动**
+## 隐私与反馈
 
-安装 [.NET 10 Desktop Runtime x64](https://dotnet.microsoft.com/download/dotnet/10.0)，注意需要 Desktop Runtime x64，而不是仅安装普通 .NET Runtime。
+通过本机 `codex app-server` 只读获取额度，不读取 `auth.json`、不发送模型请求，不上传登录凭据。设置和诊断日志保存在本机 `%LOCALAPPDATA%\CodexBadge`。
 
-## 隐私
+发现问题？[提交反馈](https://github.com/returnk/codex-usage-badge/issues/new/choose)，附上复现步骤、显示缩放和主题即可。截图或日志请先检查隐私，不要上传凭据。
 
-Codex Badge 通过本机 `codex app-server` 读取额度。它不读取 `auth.json`，不调用内部 `wham` 接口，也不会自行上传你的登录凭据。所有设置只保存在本机 `%LOCALAPPDATA%\CodexBadge`。
+[开发与构建](CodexBadge.Tauri/README.md) · [MIT License](LICENSE)
 
-## 从源码构建
-
-需要 .NET 10 SDK：
-
-```powershell
-dotnet run --project .\tests\CodexBadge.Core.Tests\CodexBadge.Core.Tests.csproj
-.\publish.ps1
-```
-
-构建结果和 `SHA256SUMS.txt` 保存在 `artifacts/`，该目录不会提交到源码仓库。
-
-## License
-
-[MIT](LICENSE)
+<sub>第三方开源工具，非 OpenAI 官方产品。</sub>

@@ -1,0 +1,86 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1100" height="430" viewBox="0 0 1100 430" role="img" aria-labelledby="title desc">
+  <title id="title">余量 · Codex Badge — 两个主题，三种外观</title>
+  <desc id="desc">当前 Tauri 风格的界面示意，使用示例数据。毛玻璃、跟随系统浅色和跟随系统深色均显示 5 小时剩余 68%、本周剩余 23%、重置时间和重置机会；不是桌面运行截图。</desc>
+  <defs>
+    <linearGradient id="canvas" x2="1" y2="1"><stop stop-color="#f2f6fb"/><stop offset="1" stop-color="#e9eef7"/></linearGradient>
+    <linearGradient id="glass" x2="1" y2="1"><stop stop-color="#fff"/><stop offset="1" stop-color="#e2eefc"/></linearGradient>
+    <linearGradient id="light" x2="1" y2="1"><stop stop-color="#f6e4d7"/><stop offset=".5" stop-color="#e9e5e3"/><stop offset="1" stop-color="#dce7f4"/></linearGradient>
+    <linearGradient id="dark" x2="1" y2="1"><stop stop-color="#2e323a"/><stop offset="1" stop-color="#222429"/></linearGradient>
+    <linearGradient id="glass-pill" x2="1" y2="1"><stop stop-color="#fff"/><stop offset="1" stop-color="#e1ecf8"/></linearGradient>
+    <linearGradient id="light-pill" x2="1" y2="1"><stop stop-color="#f4dfd1"/><stop offset="1" stop-color="#d7e4f2"/></linearGradient>
+    <linearGradient id="dark-pill" x2="1" y2="1"><stop stop-color="#3b4049"/><stop offset="1" stop-color="#25272c"/></linearGradient>
+    <linearGradient id="green"><stop stop-color="#64d46d"/><stop offset="1" stop-color="#34c759"/></linearGradient>
+  </defs>
+  <rect width="1100" height="430" rx="24" fill="url(#canvas)"/>
+  <circle cx="35" cy="408" r="140" fill="#d9e6f8" opacity=".5"/>
+  <circle cx="1060" cy="0" r="180" fill="#fff" opacity=".5"/>
+  <g font-family="Segoe UI,Microsoft YaHei,sans-serif">
+    <text x="42" y="47" fill="#1b2738" font-size="21" font-weight="600">额度在眼前，工作不中断。</text>
+    <text x="1058" y="47" text-anchor="end" fill="#69778b" font-size="13">GLASS / SYSTEM</text>
+    <g transform="translate(42 85)">
+      <text x="0" y="18" font-size="15" font-weight="600" fill="#344663">毛玻璃</text>
+      <text x="314" y="18" text-anchor="end" font-size="12" fill="#7b8798">Glass</text>
+      <g transform="translate(0 38)">
+        <rect width="314" height="174" rx="18" fill="url(#glass)" stroke="#6e88a5" stroke-opacity=".22"/>
+        <g fill="#1b2738">
+          <text x="20" y="39" font-size="15" fill="#6b7889">5 小时</text>
+          <text x="294" y="39" font-size="24" font-weight="600" text-anchor="end">68%</text>
+          <rect x="20" y="53" width="274" height="6" rx="3" fill="#223a5a" fill-opacity=".12"/>
+          <rect x="20" y="53" width="186" height="6" rx="3" fill="url(#green)"/>
+          <text x="20" y="79" font-size="13" fill="#6b7889">将于 18:46 重置</text>
+          <text x="20" y="123" font-size="14" fill="#6b7889">本周剩余</text>
+          <text x="294" y="123" font-size="20" font-weight="600" text-anchor="end">23%</text>
+          <text x="20" y="150" font-size="13" fill="#6b7889">周日 01:10 重置</text>
+          <text x="171" y="150" font-size="13">1 次重置机会</text>
+          <text x="294" y="150" font-size="13" text-anchor="end" fill="#2879e7">查看</text>
+        </g>
+        <rect x="235" y="189" width="79" height="31" rx="15.5" fill="url(#glass-pill)"/>
+        <text x="274.5" y="210" text-anchor="middle" font-size="17" font-weight="600" fill="#245aa8">68<tspan font-size="12" font-weight="500">%</tspan></text>
+      </g>
+    </g>
+    <g transform="translate(393 85)">
+      <text x="0" y="18" font-size="15" font-weight="600" fill="#344663">跟随系统 · 浅色</text>
+      <text x="314" y="18" text-anchor="end" font-size="12" fill="#7b8798">System light</text>
+      <g transform="translate(0 38)">
+        <rect width="314" height="174" rx="18" fill="url(#light)" stroke="#000" stroke-opacity=".14"/>
+        <g fill="#222">
+          <text x="20" y="39" font-size="15" fill="#74716f">5 小时</text>
+          <text x="294" y="39" font-size="24" font-weight="600" text-anchor="end">68%</text>
+          <rect x="20" y="53" width="274" height="6" rx="3" fill="#000" fill-opacity=".07"/>
+          <rect x="20" y="53" width="186" height="6" rx="3" fill="url(#green)"/>
+          <text x="20" y="79" font-size="13" fill="#74716f">将于 18:46 重置</text>
+          <text x="20" y="123" font-size="14" fill="#74716f">本周剩余</text>
+          <text x="294" y="123" font-size="20" font-weight="600" text-anchor="end">23%</text>
+          <text x="20" y="150" font-size="13" fill="#74716f">周日 01:10 重置</text>
+          <text x="171" y="150" font-size="13">1 次重置机会</text>
+          <text x="294" y="150" font-size="13" text-anchor="end" fill="#3a83f7">查看</text>
+        </g>
+        <rect x="235" y="189" width="79" height="31" rx="15.5" fill="url(#light-pill)"/>
+        <text x="274.5" y="210" text-anchor="middle" font-size="17" font-weight="600" fill="#245aa8">68<tspan font-size="12" font-weight="500">%</tspan></text>
+      </g>
+    </g>
+    <g transform="translate(744 85)">
+      <text x="0" y="18" font-size="15" font-weight="600" fill="#344663">跟随系统 · 深色</text>
+      <text x="314" y="18" text-anchor="end" font-size="12" fill="#7b8798">System dark</text>
+      <g transform="translate(0 38)">
+        <rect width="314" height="174" rx="18" fill="url(#dark)" stroke="#fff" stroke-opacity=".16"/>
+        <g fill="#f5f5f6">
+          <text x="20" y="39" font-size="15" fill="#b5b7bd">5 小时</text>
+          <text x="294" y="39" font-size="24" font-weight="600" text-anchor="end">68%</text>
+          <rect x="20" y="53" width="274" height="6" rx="3" fill="#fff" fill-opacity=".14"/>
+          <rect x="20" y="53" width="186" height="6" rx="3" fill="url(#green)"/>
+          <text x="20" y="79" font-size="13" fill="#b5b7bd">将于 18:46 重置</text>
+          <text x="20" y="123" font-size="14" fill="#b5b7bd">本周剩余</text>
+          <text x="294" y="123" font-size="20" font-weight="600" text-anchor="end">23%</text>
+          <text x="20" y="150" font-size="13" fill="#b5b7bd">周日 01:10 重置</text>
+          <text x="171" y="150" font-size="13">1 次重置机会</text>
+          <text x="294" y="150" font-size="13" text-anchor="end" fill="#72a7ff">查看</text>
+        </g>
+        <rect x="235" y="189" width="79" height="31" rx="15.5" fill="url(#dark-pill)"/>
+        <text x="274.5" y="210" text-anchor="middle" font-size="17" font-weight="600" fill="#fff">68<tspan font-size="12" font-weight="500">%</tspan></text>
+      </g>
+    </g>
+    <text x="42" y="391" fill="#6b7889" font-size="13">悬停查看详情 · 滚轮切换主题 · 拖动调整位置</text>
+    <text x="1058" y="391" text-anchor="end" fill="#6b7889" font-size="13">余量 / CODEX BADGE</text>
+  </g>
+</svg>

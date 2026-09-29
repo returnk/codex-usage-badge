@@ -1,0 +1,40 @@
+name: 问题反馈 / Bug report
+description: 告诉我们遇到了什么，以及如何复现。
+title: "[Bug] "
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: 遇到的问题 / What happened?
+      description: 描述实际表现与预期表现，可附上已去除个人信息的截图。
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤 / Steps to reproduce
+      placeholder: |
+        1. 打开 Codex 和余量
+        2. …
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: 余量版本 / Badge version
+      placeholder: v0.3.0-beta.1
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: 环境 / Environment
+      description: Windows 版本、显示缩放、毛玻璃或跟随系统、是否置顶；多屏问题请补充屏幕情况。
+      placeholder: Windows 11 · 125% · 跟随系统 / System · 非置顶
+    validations:
+      required: true
+  - type: textarea
+    id: details
+    attributes:
+      label: 补充信息 / Additional details
+      description: 可填写发生时间或脱敏日志。不要上传登录凭据、auth.json 或密钥。

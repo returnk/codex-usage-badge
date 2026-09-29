@@ -1,0 +1,16 @@
+name: 想法建议 / Feature request
+description: 你希望余量帮你解决什么问题？
+title: "[Idea] "
+body:
+  - type: textarea
+    id: need
+    attributes:
+      label: 想解决的问题 / The problem
+      description: 告诉我们你的使用场景，以及现在有什么不方便。
+    validations:
+      required: true
+  - type: textarea
+    id: suggestion
+    attributes:
+      label: 你的想法 / Your idea
+      description: 可选，简单描述你希望的效果。
