@@ -16,9 +16,9 @@ Keep your remaining quota in view without leaving your work. The badge sits alon
 
 ## Download
 
-**v0.3.0-beta.1** · Windows 10 / 11 x64 · Prerelease
+**v0.3.0** · Windows 10 / 11 x64 · Release
 
-[**Installer (recommended)**](https://github.com/returnk/codex-usage-badge/releases/download/v0.3.0-beta.1/CodexBadge-v0.3.0-beta.1-windows-x64-setup.exe) · [Portable ZIP](https://github.com/returnk/codex-usage-badge/releases/download/v0.3.0-beta.1/CodexBadge-v0.3.0-beta.1-windows-x64-portable.zip) · [Release notes](https://github.com/returnk/codex-usage-badge/releases/tag/v0.3.0-beta.1) · [SHA-256](https://github.com/returnk/codex-usage-badge/releases/download/v0.3.0-beta.1/SHA256SUMS.txt)
+[**Installer (recommended)**](https://github.com/returnk/codex-usage-badge/releases/download/v0.3.0/CodexBadge-v0.3.0-windows-x64-setup.exe) · [Portable ZIP](https://github.com/returnk/codex-usage-badge/releases/download/v0.3.0/CodexBadge-v0.3.0-windows-x64-portable.zip) · [Release notes](https://github.com/returnk/codex-usage-badge/releases/tag/v0.3.0) · [SHA-256](https://github.com/returnk/codex-usage-badge/releases/download/v0.3.0/SHA256SUMS.txt)
 
 Requires WebView2 Runtime, the signed-in Codex Windows desktop app, and a working Codex CLI. The installer can download WebView2 if needed. No .NET runtime required. The app is unsigned; Windows may show a security warning. Download only from this repository.
 
@@ -47,9 +47,9 @@ Normal mode hides when Codex is minimized. Always-on-top mode remains visible wh
 
 - **Badge missing?** Check that Codex Badge is running and the Codex window is open. Try **重新定位** (Reposition) from the tray menu.
 - **`--%`?** Check your Codex sign-in and CLI. If the CLI cannot be found, set `CODEX_BADGE_CLI` to the full path of `codex.exe`.
-- **Updating or moving the portable app?** Disable launch at login, exit the running copy, then launch the new copy and re-enable it if needed.
+- **Updating or moving the portable app?** Disable launch at login, exit the running copy, then launch the new copy and re-enable it if needed. When upgrading from v0.2.x, configure your theme and position again.
 
-This prerelease may briefly show visual artifacts during rapid hovering. Installer upgrades, display scaling, and multi-monitor behavior are still being validated. More details are in the [release notes (Chinese)](../CodexBadge.Tauri/docs/releases/v0.3.0-beta.1.md).
+Rapid hovering may briefly show visual artifacts. Installer upgrades, display scaling, and multi-monitor behavior are still being validated. More details are in the [release notes (Chinese)](../CodexBadge.Tauri/docs/releases/v0.3.0.md).
 
 ## Privacy and feedback
 

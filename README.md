@@ -8,7 +8,7 @@
 <p align="center">Windows 上的 Codex 额度胶囊 · Codex usage monitor for Windows</p>
 
 <p align="center">
-  <a href="https://github.com/returnk/codex-usage-badge/releases/tag/v0.3.0-beta.1"><img src="https://img.shields.io/badge/v0.3.0--beta.1-preview-2879E7" alt="v0.3.0-beta.1 预发布"></a>
+  <a href="https://github.com/returnk/codex-usage-badge/releases/tag/v0.3.0"><img src="https://img.shields.io/badge/v0.3.0-release-2879E7" alt="v0.3.0 正式发布"></a>
   <img src="https://img.shields.io/badge/Windows-10%20%2F%2011-1B2738" alt="Windows 10 / 11 x64">
   <img src="https://img.shields.io/badge/Tauri-2-24C8DB" alt="Tauri 2">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-34C759" alt="MIT license"></a>
@@ -28,14 +28,14 @@
 
 ## 下载
 
-**v0.3.0-beta.1** · Windows 10 / 11 x64 · 当前预发布版本
+**v0.3.0** · Windows 10 / 11 x64 · 正式发布版本
 
 | 安装版 · 推荐 | 便携版 |
 | --- | --- |
-| [下载安装器](https://github.com/returnk/codex-usage-badge/releases/download/v0.3.0-beta.1/CodexBadge-v0.3.0-beta.1-windows-x64-setup.exe) | [下载 ZIP](https://github.com/returnk/codex-usage-badge/releases/download/v0.3.0-beta.1/CodexBadge-v0.3.0-beta.1-windows-x64-portable.zip) |
+| [下载安装器](https://github.com/returnk/codex-usage-badge/releases/download/v0.3.0/CodexBadge-v0.3.0-windows-x64-setup.exe) | [下载 ZIP](https://github.com/returnk/codex-usage-badge/releases/download/v0.3.0/CodexBadge-v0.3.0-windows-x64-portable.zip) |
 | 按提示安装后运行 | 解压后运行 `codex-badge-tauri.exe` |
 
-[更新说明](https://github.com/returnk/codex-usage-badge/releases/tag/v0.3.0-beta.1) · [SHA-256 校验](https://github.com/returnk/codex-usage-badge/releases/download/v0.3.0-beta.1/SHA256SUMS.txt)
+[更新说明](https://github.com/returnk/codex-usage-badge/releases/tag/v0.3.0) · [SHA-256 校验](https://github.com/returnk/codex-usage-badge/releases/download/v0.3.0/SHA256SUMS.txt)
 
 无需 .NET。需要 **WebView2 Runtime**、已登录的 Codex Windows 桌面客户端和可用的 Codex CLI；安装器可引导下载 WebView2。程序尚未签名，首次运行可能出现 Windows 安全提示，请确认来自本仓库。
 
@@ -66,9 +66,9 @@
 
 **显示 `--%`？** 确认 Codex 已登录，且 Codex CLI 可用。找不到 CLI 时，可将环境变量 `CODEX_BADGE_CLI` 设置为 `codex.exe` 的完整路径。
 
-**更新或移动便携版？** 先关闭开机启动，再退出正在运行的版本；运行新版本后按需重新开启。开机启动会记住程序所在路径。
+**更新或移动便携版？** 先关闭开机启动，再退出正在运行的版本；运行新版本后按需重新开启。开机启动会记住程序所在路径。从 v0.2.x 升级需重新设置主题与位置。
 
-本版仍在测试中，快速来回悬停可能短暂花屏；安装升级、显示缩放及跨屏行为仍在持续验证。[查看发布说明](CodexBadge.Tauri/docs/releases/v0.3.0-beta.1.md)
+已知问题：快速来回悬停可能短暂花屏；安装升级、显示缩放及跨屏行为仍在持续验证。[查看发布说明](CodexBadge.Tauri/docs/releases/v0.3.0.md)
 
 ## 隐私与反馈
 

@@ -1,6 +1,6 @@
 # 余量 · Codex Badge — Tauri development
 
-当前产品实现：**Tauri 2 + Rust + 系统 WebView2**。当前公开版本为 **v0.3.0-beta.1**（预发布）。下载与日常使用见[项目首页](../README.md)；本页面向开发者，记录构建、诊断与验证信息。
+当前产品实现：**Tauri 2 + Rust + 系统 WebView2**。当前公开版本为 **v0.3.0**。下载与日常使用见[项目首页](../README.md)；本页面向开发者，记录构建、诊断与验证信息。
 
 Tauri 2 + Rust + system WebView2 implementation for Windows 10/11 x64. This directory is independent of the WPF source in `src/CodexBadge`.
 
@@ -43,8 +43,8 @@ For a new failure, record the time, display scaling, Glass/System choice, whethe
 
 ## Desktop acceptance
 
-This is a candidate, not an accepted stable replacement. It includes explicit initial focus=false, first-render readiness, validated iconic-host retention, independent global coordinates, popup avoidance and lifecycle generation checks. IME/composition causality, repeated native tray operations, four-DPI/multi-monitor behavior and long performance checks remain acceptance gates.
+Release v0.3.0 retains the following desktop validation gaps; publishing a release does not establish that every desktop scenario has passed. The implementation includes explicit initial focus=false, first-render readiness, validated iconic-host retention, independent global coordinates, popup avoidance and lifecycle generation checks. IME/composition causality, repeated native tray operations, four-DPI/multi-monitor behavior and long performance checks remain acceptance gates.
 
-The beta checks live owner visibility before disabling topmost. Global double-click does not reset position; normal double-click does. Fast-hover visual corruption is not resolved: process-local `--diagnose-no-hover-detail` and `--diagnose-default-cursor` isolate detail triggering versus cursor changes, one at a time, without altering saved settings or native clipping. The default build uses neither flag. Cold-wait process checks do not establish real Codex exit/reopen resource release.
+The app checks live owner visibility before disabling topmost. Global double-click does not reset position; normal double-click does. Fast-hover visual corruption is not resolved: process-local `--diagnose-no-hover-detail` and `--diagnose-default-cursor` isolate detail triggering versus cursor changes, one at a time, without altering saved settings or native clipping. The default build uses neither flag. Cold-wait process checks do not establish real Codex exit/reopen resource release.
 
 Close the WPF `CodexBadge.exe` before visual acceptance. Check capsule edge, centering and visible size at 100%, 125%, 150%, and 175% DPI; initial appearance; ordinary/maximized/restored Codex; sidebar resizing; cross-monitor moves; drag to every screen edge and after a monitor is removed; double-click; repeated tray right-clicks; hover and reset-credit flyout closing after moving outside all three badge windows; Glass/System and OS light/dark changes; topmost on/off over another app and while Codex minimizes or closes; taskbar/Alt+Tab/focus/ownership; and performance during maximize and idle. Automated checks and one launch cannot establish these desktop behaviors.
