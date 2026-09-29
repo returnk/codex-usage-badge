@@ -18,3 +18,21 @@ jobs:
           dotnet-version: 10.0.x
       - name: Run tests
         run: dotnet run --project .\tests\CodexBadge.Core.Tests\CodexBadge.Core.Tests.csproj --configuration Release
+
+  tauri-test:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: CodexBadge.Tauri
+    steps:
+      - uses: actions/checkout@v7
+      - name: Frontend tests
+        run: node --test tests/frontend.test.cjs
+      - name: Rust formatting
+        run: cargo fmt --check --manifest-path src-tauri/Cargo.toml
+      - name: Rust tests
+        run: cargo test --locked --manifest-path src-tauri/Cargo.toml
+      - name: Install locked build dependencies
+        run: npm ci
+      - name: Build Windows NSIS package
+        run: npm run build -- -- --locked

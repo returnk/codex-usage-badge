@@ -25,11 +25,23 @@ Codex 桌面客户端的额度信息不够直观，查看剩余额度和重置�
 
 ## 下载
 
+### Tauri 重构测试版：余量 · Codex Badge
+
+[**v0.3.0-beta.1 测试版下载与已知问题**](https://github.com/returnk/codex-usage-badge/releases/tag/v0.3.0-beta.1) · Windows 10/11 x64 · 提供安装器与便携 ZIP，需要 Microsoft Edge WebView2 Runtime，不需要 .NET。
+
+新实现位于 [CodexBadge.Tauri](CodexBadge.Tauri/README.md)。只有两个可选主题：**毛玻璃 / 跟随系统明暗**。已实现随 Codex 启停、独立置顶位置、两种模式右键菜单和重置机会详情；真实退出/重开资源释放、快速悬停花屏和安装升级仍需更多实测。本版不是稳定版，也不宣称原生 Windows 亚克力效果或低于旧版的运行内存。
+
+旧版与新版不能同时运行；请先关闭旧版开机启动，再从旧版托盘退出，然后运行新版。两者设置文件独立，本版不自动导入旧 WPF 设置。新版监听程序必须运行，才能在 Codex 打开时自动显示；从托盘退出后不会自动跟随。
+
+### 旧 WPF 稳定版 v0.2.0
+
 [**下载 CodexBadge-win-x64-framework-dependent.exe**](https://github.com/returnk/codex-usage-badge/releases/latest/download/CodexBadge-win-x64-framework-dependent.exe) · 约 0.30 MiB · 需要 [.NET 10 Desktop Runtime x64](https://dotnet.microsoft.com/download/dotnet/10.0)
 
 [查看全部版本与 SHA-256 校验文件](https://github.com/returnk/codex-usage-badge/releases/latest)
 
 ## 30 秒开始使用
+
+以下使用说明、功能与截图对应旧 WPF 稳定版；Tauri 测试版请阅读上方链接。
 
 1. 安装 [.NET 10 Desktop Runtime x64](https://dotnet.microsoft.com/download/dotnet/10.0)。
 2. 下载并运行 `CodexBadge-win-x64-framework-dependent.exe`。
