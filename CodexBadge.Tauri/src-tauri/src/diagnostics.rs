@@ -63,6 +63,10 @@ fn sanitize_event(event: &str) -> String {
             | "reminder_save_failed"
             | "reminder_delivery_failed"
             | "reminder_submitted"
+            | "celebration_settings_save_failed"
+            | "celebration_event_save_failed"
+            | "celebration_play"
+            | "celebration_reset_confirmed"
     ) {
         return "invalid_event".into();
     }
@@ -114,7 +118,9 @@ fn sanitize_event(event: &str) -> String {
             "label" | "stage" | "category" | "reason" | "source" | "state" | "ime"
         ) && matches!(
             value,
-            "capsule"
+            "consumed_live_credit"
+                | "early_weekly_recovery"
+                | "capsule"
                 | "detail"
                 | "credit"
                 | "menu"

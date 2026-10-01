@@ -786,6 +786,7 @@ pub struct AnchorProbe {
     avatar: Option<UIElement>,
     column: Option<UIElement>,
     pub navigation: Option<crate::domain::Rect>,
+    pub sidebar: Option<crate::domain::Rect>,
 }
 
 impl AnchorProbe {
@@ -799,6 +800,7 @@ impl AnchorProbe {
             avatar: None,
             column: None,
             navigation: None,
+            sidebar: None,
         }
     }
 
@@ -809,18 +811,36 @@ impl AnchorProbe {
             self.avatar = None;
             self.column = None;
             self.navigation = None;
+            self.sidebar = None;
         }
         let frame = frame_bounds(owner)?;
         let scale = dpi(owner) as f64 / 96.0;
         if let (Some(avatar), Some(column)) = (&self.avatar, &self.column) {
+            self.sidebar = self
+                .cached
+                .as_ref()
+                .and_then(|element| element.get_bounding_rectangle().ok())
+                .filter(|rect| is_sidebar_container(frame, scale, *rect))
+                .map(|rect| {
+                    (
+                        rect.get_left(),
+                        rect.get_top(),
+                        rect.get_right() - rect.get_left(),
+                        rect.get_bottom() - rect.get_top(),
+                    )
+                });
             let avatar_rect = avatar.get_bounding_rectangle().ok()?;
             let column_rect = column.get_bounding_rectangle().ok()?;
             if avatar.is_offscreen().unwrap_or(true)
                 || !is_avatar_column(frame, scale, avatar_rect, column_rect)
             {
+                // The wide sidebar cache is geometry-only in avatar mode; do
+                // not turn it into the legacy avatar anchor after invalidation.
+                self.cached = None;
                 self.avatar = None;
                 self.column = None;
                 self.navigation = None;
+                self.sidebar = None;
                 return None;
             }
             self.navigation = Some((
@@ -829,10 +849,7 @@ impl AnchorProbe {
                 column_rect.get_right() - column_rect.get_left(),
                 column_rect.get_bottom() - column_rect.get_top(),
             ));
-            return Some((
-                (avatar_rect.get_left() + avatar_rect.get_right()) / 2,
-                avatar_rect.get_top(),
-            ));
+            return Some(profile_anchor_point(avatar_rect, dpi(owner)));
         }
         let rect = self.cached.as_ref()?.get_bounding_rectangle().ok()?;
         let valid = is_sidebar_container(frame, scale, rect);
@@ -849,7 +866,9 @@ impl AnchorProbe {
         self.avatar = None;
         self.column = None;
         self.navigation = None;
-        if let Some((avatar, column)) = avatar_anchor(automation, owner) {
+        self.sidebar = None;
+        if let Some((avatar, column, sidebar)) = avatar_anchor(automation, owner) {
+            self.cached = sidebar;
             self.avatar = Some(avatar);
             self.column = Some(column);
             return self.read_cached(owner);
@@ -858,6 +877,17 @@ impl AnchorProbe {
         self.cached = Some(element);
         Some(point)
     }
+}
+
+fn profile_anchor_point(rect: uiautomation::types::Rect, dpi: u32) -> (i32, i32) {
+    // Round the final HWND origin once, using the CSS frame's fractional physical width.
+    // capsule_frame subtracts half its integer width from this point.
+    let center = (rect.get_left() as f64 + rect.get_right() as f64) / 2.0;
+    let half_css = 15.0 * dpi.max(96) as f64 / 96.0;
+    (
+        (center - half_css).round() as i32 + crate::domain::dip_to_px(30.0, dpi) / 2,
+        rect.get_top(),
+    )
 }
 
 fn is_avatar_column(
@@ -879,7 +909,10 @@ fn is_avatar_column(
         && (avatar.get_bottom() - avatar.get_top()) as f64 <= 64.0 * scale
 }
 
-fn avatar_anchor(automation: &UIAutomation, owner: isize) -> Option<(UIElement, UIElement)> {
+fn avatar_anchor(
+    automation: &UIAutomation,
+    owner: isize,
+) -> Option<(UIElement, UIElement, Option<UIElement>)> {
     let frame = frame_bounds(owner)?;
     let scale = dpi(owner) as f64 / 96.0;
     let root = automation.element_from_handle(Handle::from(owner)).ok()?;
@@ -904,6 +937,7 @@ fn avatar_anchor(automation: &UIAutomation, owner: isize) -> Option<(UIElement, 
             }
             let avatar_rect = avatar.get_bounding_rectangle().ok()?;
             let mut parent = avatar.clone();
+            let mut column = None;
             for _ in 0..8 {
                 parent = match walker.get_parent(&parent) {
                     Ok(parent) => parent,
@@ -913,8 +947,18 @@ fn avatar_anchor(automation: &UIAutomation, owner: isize) -> Option<(UIElement, 
                     .get_bounding_rectangle()
                     .is_ok_and(|rect| is_avatar_column(frame, scale, avatar_rect, rect))
                 {
-                    return Some((avatar, parent));
+                    column.get_or_insert_with(|| parent.clone());
                 }
+                if column.is_some()
+                    && parent
+                        .get_bounding_rectangle()
+                        .is_ok_and(|rect| is_sidebar_container(frame, scale, rect))
+                {
+                    return Some((avatar, column.unwrap(), Some(parent)));
+                }
+            }
+            if let Some(column) = column {
+                return Some((avatar, column, None));
             }
         }
     }
@@ -985,6 +1029,33 @@ fn voice_anchor(automation: &UIAutomation, owner: isize) -> Option<(UIElement, (
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn odd_avatar_width_does_not_bias_the_badge_to_the_left_at_125_percent() {
+        let point = profile_anchor_point(uiautomation::types::Rect::new(86, 1126, 131, 1171), 120);
+        let frame = crate::domain::capsule_frame(
+            &crate::domain::Settings::default(),
+            Some(point),
+            120,
+            None,
+        )
+        .unwrap();
+        // The WebView's 30 DIP frame is 37.5 physical pixels. UIA avatar center is 108.5.
+        let rendered_center = frame.0 as f64 + 18.75;
+        assert!((rendered_center - 108.5).abs() <= 0.5);
+    }
+
+    #[test]
+    fn avatar_and_css_centers_agree_at_fractional_dpi() {
+        let point = profile_anchor_point(uiautomation::types::Rect::new(86, 1126, 149, 1189), 168);
+        let frame = crate::domain::capsule_frame(
+            &crate::domain::Settings::default(),
+            Some(point),
+            168,
+            None,
+        )
+        .unwrap();
+        assert!((frame.0 as f64 + 26.25 - 117.5).abs() <= 0.5);
+    }
     #[test]
     fn avatar_navigation_uses_real_column_and_rejects_chat_list_and_root() {
         let frame = RECT {

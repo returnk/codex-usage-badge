@@ -1,5 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod celebration;
+mod celebration_window;
 mod diagnostics;
 mod domain;
 mod input;
@@ -27,6 +29,9 @@ struct Shared {
 }
 
 struct Model {
+    celebration_overlay: celebration_window::Overlay,
+    reset_detector: celebration::ResetDetector,
+    account_key: Option<u64>,
     detail_content_height: Option<f64>,
     windows: [isize; 4],
     ready: [bool; 4],
@@ -42,11 +47,15 @@ struct Model {
     anchor: Option<(i32, i32)>,
     anchor_frame: Option<(i32, i32, i32, i32)>,
     navigation: Option<domain::Rect>,
+    sidebar: Option<domain::Rect>,
     pending_anchor: Option<(i32, i32)>,
     anchor_samples: u8,
     missing_anchor_samples: u8,
     capsule_visible: bool,
     detail_visible: bool,
+    detail_credit_hint: Option<reminders::CreditReminder>,
+    detail_rendered_at: Option<Instant>,
+    detail_session: u64,
     detail_hover_blocked: bool,
     hover_detail_enabled: bool,
     last_capsule_hover: Option<bool>,
@@ -81,6 +90,9 @@ struct Model {
 impl Default for Model {
     fn default() -> Self {
         Self {
+            celebration_overlay: Default::default(),
+            reset_detector: Default::default(),
+            account_key: None,
             detail_content_height: None,
             windows: [0; 4],
             ready: [false; 4],
@@ -96,11 +108,15 @@ impl Default for Model {
             anchor: None,
             anchor_frame: None,
             navigation: None,
+            sidebar: None,
             pending_anchor: None,
             anchor_samples: 0,
             missing_anchor_samples: 0,
             capsule_visible: false,
             detail_visible: false,
+            detail_credit_hint: None,
+            detail_rendered_at: None,
+            detail_session: 0,
             detail_hover_blocked: false,
             hover_detail_enabled: !diagnostics::no_hover_detail(),
             last_capsule_hover: None,
@@ -143,6 +159,8 @@ struct Drag {
 }
 
 fn hide_flyouts(m: &mut Model) {
+    celebration_window::hide(&mut m.celebration_overlay);
+    finish_credit_view(m);
     if m.detail_visible {
         diagnostics::record("popup_hide label=detail");
     }
@@ -152,6 +170,41 @@ fn hide_flyouts(m: &mut Model) {
     m.credit_visible = false;
     m.credit_open = false;
     m.left_at = None;
+}
+
+fn finish_credit_view(m: &mut Model) {
+    let now = epoch_now();
+    if let Some(shown) = take_credit_view(m, now, Instant::now()) {
+        let mut next = m.settings.reminder_state.clone();
+        if next.viewed(&shown) {
+            let previous = m.settings.reminder_state.clone();
+            m.settings.reminder_state = next;
+            if settings::save(&m.settings).is_err() {
+                m.settings.reminder_state = previous;
+                diagnostics::record("reminder_save_failed");
+            }
+        }
+    }
+}
+
+fn take_credit_view(m: &mut Model, now: i64, at: Instant) -> Option<reminders::CreditReminder> {
+    let shown = m.detail_credit_hint.take();
+    let rendered = m.detail_rendered_at.take();
+    let fresh = domain::quota_freshness(
+        m.snapshot.as_ref().map(|s| s.fetched_at),
+        m.quota_failed,
+        now,
+    ) == "fresh";
+    if !m.detail_visible
+        || !rendered.is_some_and(|rendered| {
+            at.saturating_duration_since(rendered) >= Duration::from_secs(1)
+        })
+        || !fresh
+    {
+        return None;
+    }
+    // Count the stage actually rendered, even if the clock crossed into the next stage.
+    shown.filter(|shown| shown.valid(m.snapshot.as_ref(), fresh, now))
 }
 
 fn hide_all(m: &mut Model) {
@@ -167,6 +220,8 @@ fn release_badge_model(m: &mut Model) -> [isize; 4] {
     let windows = m.windows;
     forget_windows(m, 0..3);
     m.snapshot = None;
+    m.reset_detector.clear();
+    m.account_key = None;
     m.last_capsule = None;
     m.host_identity = None;
     m.quota_status = "等待 Codex 打开".into();
@@ -293,6 +348,8 @@ fn layout(m: &mut Model, app: &AppHandle) {
         m.capsule_visible = false;
     }
     if m.detail_visible && !native::is_visible(m.windows[1]) {
+        celebration_window::hide(&mut m.celebration_overlay);
+        finish_credit_view(m);
         m.detail_visible = false;
     }
     if m.credit_visible && !native::is_visible(m.windows[2]) {
@@ -433,9 +490,14 @@ fn layout(m: &mut Model, app: &AppHandle) {
         m.quota_failed,
         epoch_now(),
     ) == "fresh";
-    let hints = reminders::hints(m.snapshot.as_ref(), fresh, epoch_now());
+    let hints = m.settings.reminder_state.hints(
+        m.snapshot.as_ref(),
+        fresh,
+        epoch_now(),
+        m.detail_credit_hint.as_ref(),
+    );
     let extra_height = hints.messages.len() as f64 * 28.0 + if fresh { 0.0 } else { 22.0 };
-    let Some((detail_x, detail_y, detail_w, detail_h)) = domain::place_popup(
+    let Some((detail_x, detail_y, detail_w, detail_h)) = domain::place_detail_in_sidebar(
         placement,
         (
             detail_width,
@@ -450,7 +512,9 @@ fn layout(m: &mut Model, app: &AppHandle) {
         ),
         area,
         &avoid,
-        size(6.0),
+        size(if m.settings.always_on_top { 6.0 } else { 9.0 }),
+        m.sidebar.filter(|_| !m.settings.always_on_top),
+        m.navigation.filter(|_| !m.settings.always_on_top),
     ) else {
         hide_flyouts(m);
         return;
@@ -478,6 +542,12 @@ fn layout(m: &mut Model, app: &AppHandle) {
             {
                 native::show(m.windows[1]);
                 m.detail_visible = true;
+                m.detail_session = m.detail_session.wrapping_add(1);
+                m.detail_credit_hint =
+                    m.settings
+                        .reminder_state
+                        .credit_hint(m.snapshot.as_ref(), fresh, epoch_now());
+                m.detail_rendered_at = None;
             }
         }
     } else if m.detail_visible {
@@ -737,6 +807,8 @@ fn track_badge_frame(shared: &Arc<Shared>, app: &AppHandle) {
         if m.host_identity.is_some() && identity.is_some() && m.host_identity != identity {
             shared.quota_generation.fetch_add(1, Ordering::AcqRel);
             m.snapshot = None;
+            m.reset_detector.clear();
+            m.account_key = None;
         }
         m.host = host;
         m.host_identity = identity;
@@ -847,7 +919,7 @@ fn update_host_frame(m: &mut Model, frame: Option<(i32, i32, i32, i32)>) {
         if let (Some((x, y)), Some(source)) = (&mut m.anchor, m.anchor_frame) {
             *x += frame.0 - source.0;
             *y += (frame.1 + frame.3) - (source.1 + source.3);
-            if let Some(nav) = &mut m.navigation {
+            for nav in [&mut m.navigation, &mut m.sidebar].into_iter().flatten() {
                 nav.0 += frame.0 - source.0;
                 nav.1 += frame.1 - source.1;
                 nav.3 += frame.3 - source.3;
@@ -1179,6 +1251,7 @@ fn probe_anchor(shared: Arc<Shared>) {
             );
             if committed {
                 m.navigation = probe.navigation;
+                m.sidebar = probe.sidebar;
             }
         }
         thread::sleep(Duration::from_millis(250));
@@ -1266,13 +1339,24 @@ fn finish_drag(m: &mut Model) -> Option<Settings> {
 
 #[tauri::command]
 fn get_state(state: State<'_, Arc<Shared>>) -> Value {
-    let m = state.inner.lock().unwrap();
+    let mut m = state.inner.lock().unwrap();
     let freshness = domain::quota_freshness(
         m.snapshot.as_ref().map(|s| s.fetched_at),
         m.quota_failed,
         epoch_now(),
     );
     let unavailable = freshness == "unavailable";
+    if m.detail_visible {
+        let candidate = m.settings.reminder_state.credit_hint(
+            m.snapshot.as_ref(),
+            freshness == "fresh",
+            epoch_now(),
+        );
+        if m.detail_credit_hint != candidate {
+            m.detail_credit_hint = candidate;
+            m.detail_rendered_at = None;
+        }
+    }
     let snapshot = if unavailable {
         None
     } else {
@@ -1293,10 +1377,17 @@ fn get_state(state: State<'_, Arc<Shared>>) -> Value {
     } else {
         active_credits(&m)
     };
-    let hints = reminders::hints(snapshot, freshness == "fresh", epoch_now());
+    let hints = m.settings.reminder_state.hints(
+        snapshot,
+        freshness == "fresh",
+        epoch_now(),
+        m.detail_credit_hint.as_ref(),
+    );
     json!({
         "hintLevel": hints.level,
         "hintMessages": hints.messages,
+        "creditHint": m.detail_credit_hint,
+        "detailSession": m.detail_session,
         "countdown": reminders::countdown(five.and_then(|w| w.resets_at), epoch_now()),
         "notificationsEnabled": m.settings.notifications_enabled,
         "updatedAt": reminders::updated_at(m.snapshot.as_ref().map(|s| s.fetched_at)),
@@ -1360,9 +1451,23 @@ fn set_input_regions(buttons: Vec<[f64; 4]>, draggable: bool, window: tauri::Web
 }
 
 #[tauri::command]
-fn report_detail_height(height: f64, state: State<'_, Arc<Shared>>, window: tauri::WebviewWindow) {
+fn report_detail_height(
+    height: f64,
+    credit_hint: Option<reminders::CreditReminder>,
+    detail_session: u64,
+    state: State<'_, Arc<Shared>>,
+    window: tauri::WebviewWindow,
+) {
     if window.label() == "detail" && height.is_finite() && (100.0..=600.0).contains(&height) {
-        state.inner.lock().unwrap().detail_content_height = Some(height);
+        let mut m = state.inner.lock().unwrap();
+        m.detail_content_height = Some(height);
+        if m.detail_session == detail_session
+            && m.detail_visible
+            && m.detail_credit_hint.is_some()
+            && m.detail_credit_hint == credit_hint
+        {
+            m.detail_rendered_at.get_or_insert_with(Instant::now);
+        }
     }
 }
 
@@ -1565,8 +1670,12 @@ fn deliver_reminder(shared: &Arc<Shared>, app: &AppHandle) {
         epoch_now(),
     ) == "fresh";
     let mut next = m.settings.reminder_state.clone();
-    let Some(message) = next.observe(m.snapshot.as_ref(), fresh, m.settings.notifications_enabled)
-    else {
+    let Some(message) = next.observe(
+        m.snapshot.as_ref(),
+        fresh,
+        m.settings.notifications_enabled,
+        epoch_now(),
+    ) else {
         return;
     };
     let previous = m.settings.reminder_state.clone();
@@ -1783,13 +1892,18 @@ fn main() {
         }
         return;
     }
+    // Inspect prior-run evidence before diagnostics creates its first log.
+    let initial_settings = settings::load();
     diagnostics::init();
     tauri::Builder::default()
-        .setup(|app| {
+        .setup(move |app| {
             let shared = Arc::new(Shared::default());
             {
                 let mut m = shared.inner.lock().unwrap();
-                m.settings = settings::load();
+                m.settings = initial_settings;
+                if settings::save(&m.settings).is_err() {
+                    diagnostics::record("celebration_settings_save_failed");
+                }
             }
             let handle = app.handle().clone();
             let tray_shared = shared.clone();
@@ -1835,6 +1949,8 @@ fn main() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            celebration_window::request_celebration,
+            celebration_window::celebration_ready,
             get_state,
             report_capsule_layout,
             set_input_regions,
@@ -1872,6 +1988,44 @@ fn main() {
 mod stability_tests {
     use super::*;
     #[test]
+    fn detail_view_requires_a_rendered_fresh_credit_and_one_second_of_visibility() {
+        let at = Instant::now();
+        for (visible, rendered, failed, elapsed, expected) in [
+            (true, true, false, 999, false),
+            (true, true, false, 1000, true),
+            (true, false, false, 2000, false),
+            (false, true, false, 2000, false),
+            (true, true, true, 2000, false),
+        ] {
+            let mut m = Model::default();
+            m.snapshot = Some(Snapshot {
+                five_hour: None,
+                weekly: None,
+                credits: vec![domain::ResetCredit {
+                    id: "a".into(),
+                    expires_at: 10000,
+                }],
+                available_credits: Some(1),
+                fetched_at: 100,
+            });
+            m.detail_visible = visible;
+            m.detail_credit_hint =
+                m.settings
+                    .reminder_state
+                    .credit_hint(m.snapshot.as_ref(), true, 100);
+            m.detail_rendered_at = rendered.then_some(at);
+            m.quota_failed = failed;
+            assert_eq!(
+                take_credit_view(&mut m, 100, at + Duration::from_millis(elapsed)).is_some(),
+                expected
+            );
+            assert!(
+                take_credit_view(&mut m, 100, at + Duration::from_secs(3)).is_none(),
+                "closing twice must not consume another view"
+            );
+        }
+    }
+    #[test]
     fn resize_rebases_existing_anchor_without_touching_global_settings() {
         let mut m = Model::default();
         m.anchor = Some((344, 900));
@@ -1907,6 +2061,24 @@ mod stability_tests {
         m.anchor_frame = Some((200, 100, 1400, 1000));
         update_host_frame(&mut m, Some((200, 100, 1400, 1000)));
         assert_eq!(m.anchor, Some((544, 1100)));
+    }
+    #[test]
+    fn host_motion_keeps_sidebar_and_navigation_in_the_same_coordinate_frame() {
+        let old = (100, 100, 1000, 900);
+        let next = (150, 200, 1200, 950);
+        let mut m = Model {
+            last_host_frame: Some(old),
+            anchor_frame: Some(old),
+            anchor: Some((130, 950)),
+            navigation: Some((100, 140, 65, 860)),
+            sidebar: Some((100, 140, 425, 860)),
+            ..Model::default()
+        };
+        update_host_frame(&mut m, Some(next));
+        assert_eq!(m.navigation, Some((150, 240, 65, 910)));
+        assert_eq!(m.sidebar, Some((150, 240, 425, 910)));
+        update_host_frame(&mut m, Some(next));
+        assert_eq!(m.sidebar, Some((150, 240, 425, 910)));
     }
 
     #[test]

@@ -54,6 +54,8 @@ pub struct Settings {
     pub notifications_enabled: bool,
     #[serde(default)]
     pub reminder_state: crate::reminders::ReminderTracker,
+    #[serde(default = "crate::celebration::CelebrationState::existing_install")]
+    pub celebration_state: crate::celebration::CelebrationState,
     #[serde(default, deserialize_with = "read_global_position")]
     pub global_position: Option<GlobalPosition>,
 }
@@ -114,6 +116,7 @@ impl Default for Settings {
             always_on_top: false,
             notifications_enabled: false,
             reminder_state: Default::default(),
+            celebration_state: Default::default(),
             global_position: None,
         }
     }
@@ -489,6 +492,33 @@ pub fn place_popup(
     place_popup_at(anchor, size, area, avoid, gap, None)
 }
 
+pub fn place_detail_in_sidebar(
+    anchor: Rect,
+    size: (i32, i32),
+    area: Rect,
+    avoid: &[Rect],
+    gap: i32,
+    sidebar: Option<Rect>,
+    navigation: Option<Rect>,
+) -> Option<Rect> {
+    if let (Some(sidebar), Some(nav)) = (sidebar, navigation) {
+        let left = nav.0 + nav.2;
+        let right = sidebar.0 + sidebar.2;
+        if right - left >= size.0 + 2 * gap {
+            let rect = (left + gap, anchor.1 + anchor.3 - size.1, size.0, size.1);
+            if rect.0 >= area.0
+                && rect.1 >= area.1
+                && rect.0 + rect.2 <= area.2
+                && rect.1 + rect.3 <= area.3
+                && avoid.iter().all(|a| !rects_intersect(rect, *a))
+            {
+                return Some(rect);
+            }
+        }
+    }
+    place_popup(anchor, size, area, avoid, gap)
+}
+
 fn place_popup_at(
     anchor: Rect,
     size: (i32, i32),
@@ -702,6 +732,54 @@ mod tests {
             assert!(popup.0 >= 106);
             assert!(!rects_intersect(popup, nav));
             assert!(!rects_intersect(popup, capsule));
+        }
+    }
+    #[test]
+    fn detail_keeps_its_default_left_inset_when_the_sidebar_widens() {
+        for dpi in [96, 120, 144, 168, 192] {
+            let p = |v| dip_to_px(v, dpi);
+            for body in [288.0, 340.0, 420.0] {
+                let nav = (p(60.0), p(40.0), p(52.0), p(800.0));
+                let sidebar = (p(60.0), p(40.0), p(52.0 + body), p(800.0));
+                let capsule = (p(68.0), p(760.0), p(30.0), p(30.0));
+                let rect = place_detail_in_sidebar(
+                    capsule,
+                    (p(270.0), p(148.0)),
+                    (0, 0, p(1200.0), p(900.0)),
+                    &[capsule, nav],
+                    p(9.0),
+                    Some(sidebar),
+                    Some(nav),
+                )
+                .unwrap();
+                let left = rect.0 - (nav.0 + nav.2);
+                let right = sidebar.0 + sidebar.2 - (rect.0 + rect.2);
+                assert_eq!(left, p(9.0), "dpi={dpi} body={body}");
+                if body == 288.0 {
+                    assert!((left - right).abs() <= 1);
+                }
+            }
+        }
+    }
+    #[test]
+    fn narrow_or_unknown_sidebar_retains_the_existing_safe_placement() {
+        let nav = (0, 0, 52, 800);
+        let capsule = (8, 700, 30, 30);
+        let area = (0, 0, 1000, 900);
+        let expected = place_popup(capsule, (270, 148), area, &[nav, capsule], 6);
+        for sidebar in [None, Some((0, 0, 250, 800))] {
+            assert_eq!(
+                place_detail_in_sidebar(
+                    capsule,
+                    (270, 148),
+                    area,
+                    &[nav, capsule],
+                    6,
+                    sidebar,
+                    Some(nav)
+                ),
+                expected
+            );
         }
     }
     #[test]

@@ -27,9 +27,23 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: Frontend tests
-        run: node --test tests/frontend.test.cjs
+        run: node --test tests/frontend.test.cjs tests/celebration.test.cjs
       - name: Rust formatting
         run: cargo fmt --check --manifest-path src-tauri/Cargo.toml
+      - name: Identify Rust compiler for cache
+        id: rust-version
+        shell: pwsh
+        run: '"version=$(rustc --version)" >> $env:GITHUB_OUTPUT'
+      - name: Cache Rust dependencies and build outputs
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            CodexBadge.Tauri/src-tauri/target
+          key: ${{ runner.os }}-tauri-${{ steps.rust-version.outputs.version }}-${{ hashFiles('CodexBadge.Tauri/src-tauri/Cargo.lock') }}-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-tauri-${{ steps.rust-version.outputs.version }}-${{ hashFiles('CodexBadge.Tauri/src-tauri/Cargo.lock') }}-
       - name: Rust tests
         run: cargo test --locked --manifest-path src-tauri/Cargo.toml
       - name: Install locked build dependencies

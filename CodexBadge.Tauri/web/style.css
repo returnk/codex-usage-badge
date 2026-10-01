@@ -71,6 +71,7 @@ html, body { overflow: hidden; font-family: "Segoe UI", sans-serif; user-select:
 .hint-dot[data-level="urgent"] { background: #e5484d; }
 .quota-hint { margin-top: 8px; font-size: 11.5px; line-height: 16px; white-space: pre-line; overflow-wrap: anywhere; color: var(--warning); }
 .quota-hint[data-level="urgent"] { color: #e5484d; }
+.quota-hint[data-credit="true"] { color: #e5484d; }
 .last-updated { margin-top: 6px; font-size: 11px; line-height: 16px; }
 
 body.view-detail, body.view-credit, body.view-menu { padding: 2px; }

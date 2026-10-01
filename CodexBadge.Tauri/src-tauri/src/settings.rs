@@ -8,11 +8,35 @@ fn path() -> Option<PathBuf> {
 }
 
 pub fn load() -> Settings {
-    path()
-        .and_then(|path| fs::read(path).ok())
-        .and_then(|bytes| serde_json::from_slice::<Settings>(&bytes).ok())
+    let file = path();
+    let existing = file.as_ref().is_some_and(|file| {
+        file.exists()
+            || file.parent().is_some_and(|directory| {
+                [
+                    "tauri-diagnostics.log",
+                    "tauri-diagnostics.log.old",
+                    "settings.json",
+                ]
+                .iter()
+                .any(|name| directory.join(name).exists())
+            })
+    });
+    let bytes = file.and_then(|file| fs::read(file).ok());
+    decode(bytes.as_deref(), existing)
+}
+
+fn decode(bytes: Option<&[u8]>, existing: bool) -> Settings {
+    bytes
+        .and_then(|bytes| serde_json::from_slice::<Settings>(bytes).ok())
         .filter(|settings| settings.offset_x.is_finite() && settings.offset_y.is_finite())
-        .unwrap_or_default()
+        .unwrap_or_else(|| {
+            let mut settings = Settings::default();
+            if existing {
+                settings.celebration_state =
+                    crate::celebration::CelebrationState::existing_install();
+            }
+            settings
+        })
 }
 
 pub fn save(settings: &Settings) -> Result<(), String> {
@@ -49,6 +73,18 @@ pub fn set_startup(enabled: bool) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn only_a_new_install_has_a_welcome_pending() {
+        assert!(!decode(None, false).celebration_state.welcome_done);
+        assert!(
+            decode(Some(b"corrupt"), true)
+                .celebration_state
+                .welcome_done
+        );
+        assert!(decode(None, true).celebration_state.welcome_done);
+        let legacy = br#"{"theme":"glass","offsetX":0,"offsetY":0,"startWithWindows":false}"#;
+        assert!(decode(Some(legacy), true).celebration_state.welcome_done);
+    }
     #[test]
     fn settings_round_trip_keeps_glass_default_theme() {
         let source = Settings {

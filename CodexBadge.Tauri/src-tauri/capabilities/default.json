@@ -2,6 +2,6 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Codex Badge windows use application Rust commands and event updates.",
-  "windows": ["capsule", "detail", "credit", "menu"],
+  "windows": ["capsule", "detail", "credit", "menu", "celebration"],
   "permissions": ["core:default"]
 }

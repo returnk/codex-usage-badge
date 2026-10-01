@@ -18,6 +18,33 @@ use windows::Win32::System::JobObjects::{
     JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
 };
 
+fn celebration_account_key(account: Option<u64>, response: &Value) -> Option<u64> {
+    use std::hash::{Hash, Hasher};
+    let account = account?;
+    let (source, limits) = if let Some(all) = response
+        .get("rateLimitsByLimitId")
+        .and_then(Value::as_object)
+    {
+        ("by_id", all.get("codex")?)
+    } else {
+        ("legacy", response.get("rateLimits")?)
+    };
+    let plan = limits.get("planType")?.as_str()?;
+    if plan.is_empty() || plan == "unknown" {
+        return None;
+    }
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    (
+        account,
+        source,
+        plan,
+        limits.get("limitId"),
+        limits.get("normalModelSlug"),
+    )
+        .hash(&mut hasher);
+    Some(hasher.finish())
+}
+
 fn now() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -288,9 +315,21 @@ pub fn run(shared: Arc<Shared>, app: AppHandle) {
                 break;
             }
             if Instant::now() >= next_read {
+                // Identify the account for every sample, so a switch never resembles a reset.
+                let account_key = server
+                    .request("account/read", json!({"refreshToken":false}))
+                    .ok()
+                    .and_then(|value| value.get("account").filter(|v| !v.is_null()).cloned())
+                    .map(|account| {
+                        use std::hash::{Hash, Hasher};
+                        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                        account.to_string().hash(&mut hasher);
+                        hasher.finish()
+                    });
                 match server.request("account/rateLimits/read", json!({})) {
                     Ok(value) => {
                         let snapshot = domain::parse_quota(&value, now());
+                        let account_key = celebration_account_key(account_key, &value);
                         diagnostics::record(format!(
                             "quota_snapshot generation={} snapshot_valid={}",
                             server.generation,
@@ -309,6 +348,18 @@ pub fn run(shared: Arc<Shared>, app: AppHandle) {
                                 || !shared.quota_active.load(Ordering::Acquire)
                             {
                                 break;
+                            }
+                            m.account_key = account_key;
+                            let detector_before = m.reset_detector.clone();
+                            if let Some(key) = m.reset_detector.observe(&snapshot, account_key) {
+                                let before = m.settings.celebration_state.clone();
+                                if m.settings.celebration_state.queue(key, snapshot.fetched_at)
+                                    && crate::settings::save(&m.settings).is_err()
+                                {
+                                    m.settings.celebration_state = before;
+                                    m.reset_detector = detector_before;
+                                    diagnostics::record("celebration_event_save_failed");
+                                }
                             }
                             m.snapshot = Some(snapshot);
                             m.quota_failed = false;
@@ -370,6 +421,8 @@ fn fail(shared: &Shared, app: &AppHandle, error: &str) {
     {
         let mut m = shared.inner.lock().unwrap();
         m.quota_failed = true;
+        m.reset_detector.clear();
+        m.account_key = None;
         m.quota_status = status.into();
     }
     let _ = app.emit("state-updated", ());
@@ -536,5 +589,30 @@ mod tests {
         );
         assert!(log.contains("category=timeout"));
         assert!(log.contains("duration_ms=10000"));
+    }
+    #[test]
+    fn celebration_identity_requires_known_plan_and_codex_source() {
+        let a = json!({"rateLimitsByLimitId":{"codex":{"planType":"plus"}}});
+        let b = json!({"rateLimitsByLimitId":{"codex":{"planType":"pro"}}});
+        assert_ne!(
+            celebration_account_key(Some(1), &a),
+            celebration_account_key(Some(1), &b)
+        );
+        assert_ne!(
+            celebration_account_key(Some(1), &a),
+            celebration_account_key(Some(2), &a)
+        );
+        assert!(celebration_account_key(Some(1), &json!({"rateLimits":{}})).is_none());
+        assert!(celebration_account_key(
+            Some(1),
+            &json!({"rateLimitsByLimitId":{"other":{"planType":"plus"}}})
+        )
+        .is_none());
+        assert!(celebration_account_key(None, &a).is_none());
+        let legacy = json!({"rateLimits":{"planType":"plus"}});
+        assert_ne!(
+            celebration_account_key(Some(1), &a),
+            celebration_account_key(Some(1), &legacy)
+        );
     }
 }

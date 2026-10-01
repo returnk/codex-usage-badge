@@ -176,9 +176,59 @@ unsafe extern "system" fn hint_proc(
     }
     DefWindowProcW(window, message, wparam, lparam)
 }
+const NOTIFICATION_HINT: [&str; 2] = [
+    "重置卡临近过期时显示 Windows 通知。",
+    "关闭系统通知不影响胶囊的有限次提醒。",
+];
+
+unsafe fn hint_layout(dpi: u32) -> ((i32, i32), [RECT; 2]) {
+    let p = |v| domain::dip_to_px(v, dpi);
+    let dc = CreateCompatibleDC(None);
+    let font = text_font(11, dpi);
+    let previous = SelectObject(dc, HGDIOBJ(font.0));
+    let mut metrics = SIZE::default();
+    let mut width = 0;
+    let mut height = 0;
+    for line in NOTIFICATION_HINT {
+        let value: Vec<u16> = line.encode_utf16().collect();
+        let _ = GetTextExtentPoint32W(dc, &value, &mut metrics);
+        width = width.max(metrics.cx);
+        height = height.max(metrics.cy);
+    }
+    SelectObject(dc, previous);
+    let _ = DeleteObject(HGDIOBJ(font.0));
+    let _ = DeleteDC(dc);
+    if width <= 0 || height <= 0 {
+        width = p(246.0);
+        height = p(16.0);
+    }
+    let pad_x = p(12.0);
+    let pad_y = p(8.0);
+    let gap = p(2.0);
+    let w = width + pad_x * 2;
+    let h = height * 2 + pad_y * 2 + gap;
+    (
+        (w, h),
+        [
+            RECT {
+                left: pad_x,
+                top: pad_y,
+                right: w - pad_x,
+                bottom: pad_y + height,
+            },
+            RECT {
+                left: pad_x,
+                top: pad_y + height + gap,
+                right: w - pad_x,
+                bottom: h - pad_y,
+            },
+        ],
+    )
+}
+
 unsafe fn paint_hint(window: HWND, state: &HintState, position: (i32, i32)) -> bool {
     let p = |v: f64| domain::dip_to_px(v, state.dpi);
-    let size = (p(270.0), p(52.0));
+    let (size, rows) = hint_layout(state.dpi);
     render_layer(
         window,
         position,
@@ -195,16 +245,10 @@ unsafe fn paint_hint(window: HWND, state: &HintState, position: (i32, i32)) -> b
             background(dc, client, state.checks.dark.load(Ordering::Relaxed));
             let dark = state.checks.dark.load(Ordering::Relaxed);
             let fg = COLORREF(if dark { 0x00b8afa8 } else { 0x00887766 });
-            let p = |v: f64| domain::dip_to_px(v, state.dpi);
             text(
                 dc,
-                "额度偏低或恢复时显示 Windows 通知。",
-                RECT {
-                    left: p(12.0),
-                    top: p(10.0),
-                    right: client.right - p(12.0),
-                    bottom: p(26.0),
-                },
+                NOTIFICATION_HINT[0],
+                rows[0],
                 11,
                 fg,
                 DT_LEFT,
@@ -212,13 +256,8 @@ unsafe fn paint_hint(window: HWND, state: &HintState, position: (i32, i32)) -> b
             );
             text(
                 dc,
-                "关闭后，胶囊提示点仍然显示。",
-                RECT {
-                    left: p(12.0),
-                    top: p(26.0),
-                    right: client.right - p(12.0),
-                    bottom: p(42.0),
-                },
+                NOTIFICATION_HINT[1],
+                rows[1],
                 11,
                 fg,
                 DT_LEFT,
@@ -243,7 +282,8 @@ unsafe fn tip(window: HWND, state: &mut State, show: bool) {
         return;
     };
     let p = |v: f64| domain::dip_to_px(v, state.dpi);
-    let (width, height, gap) = (p(270.0), p(52.0), p(6.0));
+    let ((width, height), _) = hint_layout(state.dpi);
+    let gap = p(6.0);
     let x = if state.left_submenu {
         rect.left
     } else {
@@ -608,16 +648,8 @@ unsafe extern "system" fn window_proc(
     }
     DefWindowProcW(window, message, wparam, lparam)
 }
-unsafe fn text(
-    dc: HDC,
-    value: &str,
-    rect: RECT,
-    size: i32,
-    color: COLORREF,
-    align: DRAW_TEXT_FORMAT,
-    dpi: u32,
-) {
-    let font = CreateFontW(
+unsafe fn text_font(size: i32, dpi: u32) -> HFONT {
+    CreateFontW(
         -domain::dip_to_px(size as f64, dpi),
         0,
         0,
@@ -632,7 +664,18 @@ unsafe fn text(
         CLEARTYPE_QUALITY,
         0,
         w!("Segoe UI"),
-    );
+    )
+}
+unsafe fn text(
+    dc: HDC,
+    value: &str,
+    rect: RECT,
+    size: i32,
+    color: COLORREF,
+    align: DRAW_TEXT_FORMAT,
+    dpi: u32,
+) {
+    let font = text_font(size, dpi);
     let previous = SelectObject(dc, HGDIOBJ(font.0));
     SetTextColor(dc, color);
     SetBkMode(dc, TRANSPARENT);
@@ -898,6 +941,20 @@ unsafe fn render_layer(
 }
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn notification_hint_fits_its_short_copy_and_has_even_line_box_padding() {
+        for dpi in [96, 120, 144, 168, 192] {
+            let ((w, h), rows) = unsafe { super::hint_layout(dpi) };
+            assert!(
+                w < crate::domain::dip_to_px(260.0, dpi),
+                "old copy left too much space at dpi={dpi}"
+            );
+            assert_eq!(rows[0].left, w - rows[0].right);
+            assert_eq!(rows[0].top, h - rows[1].bottom);
+            assert_eq!(rows[0].bottom - rows[0].top, rows[1].bottom - rows[1].top);
+            assert!(rows[1].top > rows[0].bottom);
+        }
+    }
     use super::*;
     #[test]
     fn layered_frames_commit_position_and_size_without_activation() {

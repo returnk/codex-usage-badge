@@ -9,6 +9,9 @@ let rendering = false;
 let renderAgain = false;
 let readyReported = false;
 let readyQueued = false;
+let renderedCreditHint = null;
+let renderedDetailSession = 0;
+let celebrationSession = -1;
 function sendReady() {
   if (readyReported || readyQueued) return;
   readyQueued = true;
@@ -46,7 +49,12 @@ function reportContent() {
       const visible=[...card.children].filter(item=>!item.hidden);
       const bottom=Math.max(...visible.map(item=>item.getBoundingClientRect().bottom));
       const height=Math.ceil(bottom-card.getBoundingClientRect().top+(card.scrollTop || 0)+parseFloat(getComputedStyle(card).paddingBottom)+6);
-      invoke('report_detail_height', {height}).catch(console.error);
+      invoke('report_detail_height', {height, creditHint:renderedCreditHint, detailSession:renderedDetailSession}).catch(console.error);
+      if (readyReported && celebrationSession !== renderedDetailSession) {
+        const session = renderedDetailSession;
+        celebrationSession = session;
+        invoke('request_celebration',{detailSession:session}).catch(console.error);
+      }
     }
   });
 }
@@ -133,6 +141,8 @@ async function renderState() {
     document.getElementById('hint-dot').dataset.level = hintLevel;
     app.querySelector('.capsule').setAttribute('aria-label', [`剩余额度 ${state.capsule}`, ...(state.hintMessages || [])].join('，'));
   } else if (view === 'detail') {
+    renderedCreditHint = state.creditHint || null;
+    renderedDetailSession = state.detailSession || 0;
     document.getElementById('five-value').textContent = percent(state.fiveHour);
     document.getElementById('five-note').textContent = state.weeklyExhausted ? '（暂不可用）' : '';
     document.getElementById('five-reset').textContent = state.weeklyExhausted
@@ -144,6 +154,7 @@ async function renderState() {
     hint.textContent = (state.hintMessages || []).join('\n');
     hint.hidden = !hint.textContent;
     hint.dataset.level = state.hintLevel || 'none';
+    hint.dataset.credit = String((state.hintMessages || []).some(message => message.includes('重置卡')));
     const updated = document.getElementById('last-updated');
     updated.hidden = !state.fetchedAt || !['stale', 'unavailable'].includes(state.freshness);
     if (state.fetchedAt) {
