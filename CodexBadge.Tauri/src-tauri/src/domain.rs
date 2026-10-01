@@ -50,6 +50,10 @@ pub struct Settings {
     pub start_with_windows: bool,
     #[serde(default)]
     pub always_on_top: bool,
+    #[serde(default)]
+    pub notifications_enabled: bool,
+    #[serde(default)]
+    pub reminder_state: crate::reminders::ReminderTracker,
     #[serde(default, deserialize_with = "read_global_position")]
     pub global_position: Option<GlobalPosition>,
 }
@@ -83,8 +87,8 @@ pub fn global_frame(
     area: (i32, i32, i32, i32),
     dpi: u32,
 ) -> (i32, i32, i32, i32) {
-    let w = dip_to_px(71.0, dpi);
-    let h = dip_to_px(30.0, dpi);
+    let w = dip_to_px(72.0, dpi);
+    let h = dip_to_px(34.0, dpi);
     let point = saved
         .map(|p| {
             (
@@ -108,6 +112,8 @@ impl Default for Settings {
             offset_y: 0.0,
             start_with_windows: false,
             always_on_top: false,
+            notifications_enabled: false,
+            reminder_state: Default::default(),
             global_position: None,
         }
     }
@@ -327,9 +333,11 @@ pub fn dip_to_px(dip: f64, dpi: u32) -> i32 {
     (dip * dpi.max(96) as f64 / 96.0).round() as i32
 }
 pub fn capsule_origin(anchor: (i32, i32), dpi: u32, offset: (f64, f64)) -> (i32, i32) {
+    let width = dip_to_px(30.0, dpi);
+    let inset = dip_to_px(2.0, dpi);
     (
-        anchor.0 - dip_to_px(69.0 - offset.0, dpi),
-        anchor.1 - dip_to_px(35.0 - offset.1, dpi),
+        anchor.0 - width / 2 + inset + dip_to_px(offset.0, dpi),
+        anchor.1 - width - dip_to_px(10.0, dpi) + inset + dip_to_px(offset.1, dpi),
     )
 }
 pub fn capsule_window_rect(x: i32, y: i32, dpi: u32) -> (i32, i32, i32, i32) {
@@ -337,7 +345,7 @@ pub fn capsule_window_rect(x: i32, y: i32, dpi: u32) -> (i32, i32, i32, i32) {
     (
         x - inset,
         y - inset,
-        dip_to_px(71.0, dpi),
+        dip_to_px(30.0, dpi),
         dip_to_px(30.0, dpi),
     )
 }
@@ -403,6 +411,74 @@ pub fn rects_intersect(a: Rect, b: Rect) -> bool {
     a.0 < b.0 + b.2 && b.0 < a.0 + a.2 && a.1 < b.1 + b.3 && b.1 < a.1 + a.3
 }
 
+pub fn place_vertical_popup(
+    anchor: Rect,
+    size: (i32, i32),
+    area: Rect,
+    avoid: &[Rect],
+    gap: i32,
+) -> Option<Rect> {
+    let width = size.0.min(area.2 - area.0);
+    if width < 80 {
+        return None;
+    }
+    let x = (anchor.0 + anchor.2 - width).clamp(area.0, area.2 - width);
+    let above = anchor.1 - gap - area.1;
+    let below = area.3 - anchor.1 - anchor.3 - gap;
+    let candidate = |top: bool, height: i32| {
+        let y = if top {
+            anchor.1 - gap - height
+        } else {
+            anchor.1 + anchor.3 + gap
+        };
+        let rect = (x, y, width, height);
+        (height >= 32
+            && y >= area.1
+            && y + height <= area.3
+            && avoid.iter().all(|other| !rects_intersect(rect, *other)))
+        .then_some(rect)
+    };
+    if above >= size.1 {
+        if let Some(rect) = candidate(true, size.1) {
+            return Some(rect);
+        }
+    }
+    if below >= size.1 {
+        if let Some(rect) = candidate(false, size.1) {
+            return Some(rect);
+        }
+    }
+    let top = above >= below;
+    candidate(top, size.1.min(if top { above } else { below }))
+        .or_else(|| candidate(!top, size.1.min(if top { below } else { above })))
+}
+
+#[cfg(test)]
+mod vertical_popup_tests {
+    use super::*;
+    #[test]
+    fn credit_popup_prefers_above_then_below_and_never_the_side() {
+        let anchor = (200, 300, 270, 148);
+        assert_eq!(
+            place_vertical_popup(anchor, (205, 36), (0, 0, 1000, 800), &[anchor], 6),
+            Some((265, 258, 205, 36))
+        );
+        let top = (200, 10, 270, 148);
+        assert_eq!(
+            place_vertical_popup(top, (205, 36), (0, 0, 1000, 800), &[top], 6),
+            Some((265, 164, 205, 36))
+        );
+        let edge = (900, 300, 100, 148);
+        assert_eq!(
+            place_vertical_popup(edge, (205, 36), (0, 0, 1000, 800), &[edge], 6),
+            Some((795, 258, 205, 36))
+        );
+        assert!(
+            place_vertical_popup((0, 0, 270, 100), (205, 36), (0, 0, 300, 120), &[], 6).is_none()
+        );
+    }
+}
+
 pub fn place_popup(
     anchor: Rect,
     size: (i32, i32),
@@ -422,6 +498,10 @@ fn place_popup_at(
     preferred_x: Option<i32>,
 ) -> Option<Rect> {
     let (x, y, w, h) = anchor;
+    let right_x = avoid
+        .iter()
+        .filter(|rect| rect.1 < y + h && rect.1 + rect.3 > y + h - size.1)
+        .fold(x + w + gap, |edge, rect| edge.max(rect.0 + rect.2 + gap));
     let fits = |rect: Rect| {
         rect.2 >= 80
             && rect.3 >= 32
@@ -432,10 +512,11 @@ fn place_popup_at(
             && avoid.iter().all(|a| !rects_intersect(rect, *a))
     };
     for point in [
+        (right_x, y + h - size.1),
         (preferred_x.unwrap_or(x + w - size.0), y - size.1 - gap),
         (preferred_x.unwrap_or(x + w - size.0), y + h + gap),
         (x - size.0 - gap, y),
-        (x + w + gap, y),
+        (right_x, y),
     ] {
         let (px, py) = clamp_to_work_area(point, size, area);
         let candidate = (px, py, size.0, size.1);
@@ -448,7 +529,7 @@ fn place_popup_at(
         (area.0, area.1, area.2, y - gap),
         (area.0, y + h + gap, area.2, area.3),
         (area.0, area.1, x - gap, area.3),
-        (x + w + gap, area.1, area.2, area.3),
+        (right_x, area.1, area.2, area.3),
     ];
     strips
         .into_iter()
@@ -469,7 +550,8 @@ fn place_popup_at(
         .max_by_key(|rect| rect.2 as i64 * rect.3 as i64)
 }
 
-pub fn place_detail_popup(
+#[cfg(test)]
+fn place_detail_popup(
     capsule: Rect,
     size: (i32, i32),
     area: Rect,
@@ -599,33 +681,54 @@ pub fn format_weekly_reset(epoch: Option<i64>) -> String {
 mod tests {
     use super::*;
     #[test]
-    fn detail_keeps_inset_right_alignment_at_every_dpi() {
-        let area = (0, 0, 1600, 1000);
-        // Literal results catch accidental centering, missing inset, and an
-        // inset expressed in physical pixels rather than DPI-scaled DIP.
-        for (dpi, capsule, size, gap, expected) in [
-            (96, (273, 950, 71, 30), (270, 148), 6, (72, 796, 270, 148)),
-            (96, (577, 950, 71, 30), (270, 148), 6, (376, 796, 270, 148)),
-            (120, (254, 950, 89, 38), (338, 185), 8, (2, 757, 338, 185)),
-            (120, (558, 950, 89, 38), (338, 185), 8, (306, 757, 338, 185)),
-            (
-                144,
-                (900, 950, 107, 45),
-                (405, 222),
-                9,
-                (599, 719, 405, 222),
-            ),
-            (
-                168,
-                (900, 940, 124, 53),
-                (473, 259),
-                11,
-                (547, 670, 473, 259),
-            ),
-        ] {
-            assert_eq!(
-                place_detail_popup(capsule, size, area, gap, dpi),
-                Some(expected)
+    fn avatar_capsule_is_centered_and_fits_the_navigation_column() {
+        for dpi in [96, 120, 144, 192] {
+            let anchor = (dip_to_px(26.0, dpi), dip_to_px(850.0, dpi));
+            let rect = capsule_frame(&Settings::default(), Some(anchor), dpi, None).unwrap();
+            assert_eq!(rect.2, dip_to_px(30.0, dpi));
+            assert_eq!(rect.3, rect.2);
+            assert!((rect.0 + rect.2 / 2 - anchor.0).abs() <= 1);
+            assert!(rect.0 >= dip_to_px(2.0, dpi));
+            assert!(rect.0 + rect.2 <= dip_to_px(50.0, dpi));
+            assert_eq!(rect.1 + rect.3, anchor.1 - dip_to_px(10.0, dpi));
+        }
+    }
+    #[test]
+    fn wide_navigation_and_left_aligned_avatar_leave_popup_space_on_the_right() {
+        let nav = (0, 40, 100, 860);
+        let capsule = (27, 810, 46, 30);
+        for size in [(270, 148), (190, 148), (205, 72)] {
+            let popup = place_popup(capsule, size, (8, 8, 1000, 900), &[capsule, nav], 6).unwrap();
+            assert!(popup.0 >= 106);
+            assert!(!rects_intersect(popup, nav));
+            assert!(!rects_intersect(popup, capsule));
+        }
+    }
+    #[test]
+    fn detail_prefers_right_up_and_avoids_the_navigation_column_at_every_dpi() {
+        for dpi in [96, 120, 144, 192] {
+            let p = |v| dip_to_px(v, dpi);
+            let capsule = (p(3.0), p(810.0), p(46.0), p(30.0));
+            let nav = (0, p(40.0), p(52.0), p(860.0));
+            let area = (p(8.0), p(8.0), p(1000.0), p(892.0));
+            let detail =
+                place_popup(capsule, (p(270.0), p(148.0)), area, &[capsule, nav], p(6.0)).unwrap();
+            assert!(detail.0 >= nav.0 + nav.2);
+            assert!(detail.1 < capsule.1);
+            assert!(!rects_intersect(detail, nav));
+            assert!(!rects_intersect(detail, capsule));
+            let credit = place_popup(
+                detail,
+                (p(205.0), p(72.0)),
+                area,
+                &[capsule, nav, detail],
+                p(6.0),
+            )
+            .unwrap();
+            assert!(
+                !rects_intersect(credit, nav)
+                    && !rects_intersect(credit, detail)
+                    && !rects_intersect(credit, capsule)
             );
         }
     }
@@ -924,6 +1027,7 @@ mod tests {
             start_with_windows: true,
             always_on_top: true,
             global_position: None,
+            ..Settings::default()
         };
         reset_position(&mut settings);
         assert_eq!((settings.offset_x, settings.offset_y), (0.0, 0.0));
@@ -943,9 +1047,9 @@ mod tests {
             let (outer_x, outer_y, outer_w, outer_h) = capsule_window_rect(400, 600, dpi);
             assert_eq!(outer_x, 400 - dip_to_px(2.0, dpi));
             assert_eq!(outer_y, 600 - dip_to_px(2.0, dpi));
-            assert_eq!(outer_w, dip_to_px(71.0, dpi));
+            assert_eq!(outer_w, dip_to_px(30.0, dpi));
             assert_eq!(outer_h, dip_to_px(30.0, dpi));
-            assert!((outer_w - 2 * dip_to_px(2.0, dpi) - dip_to_px(67.0, dpi)).abs() <= 1);
+            assert!((outer_w - 2 * dip_to_px(2.0, dpi) - dip_to_px(26.0, dpi)).abs() <= 1);
         }
         let (pending, samples, ready) = stable_anchor(None, 0, Some((344, 900)));
         assert_eq!((pending, samples, ready), (Some((344, 900)), 1, None));
@@ -973,10 +1077,10 @@ mod tests {
     }
 
     #[test]
-    fn default_capsule_covers_voice_text_with_balanced_right_gap() {
-        assert_eq!(capsule_origin((344, 1400), 96, (0.0, 0.0)), (275, 1365));
-        assert_eq!(capsule_origin((430, 1750), 120, (0.0, 0.0)), (344, 1706));
-        assert_eq!(capsule_origin((430, 1750), 120, (4.0, -2.0)), (349, 1704));
+    fn default_capsule_uses_avatar_center_and_ten_dip_gap() {
+        assert_eq!(capsule_origin((344, 1400), 96, (0.0, 0.0)), (331, 1362));
+        assert_eq!(capsule_origin((430, 1750), 120, (0.0, 0.0)), (414, 1702));
+        assert_eq!(capsule_origin((430, 1750), 120, (4.0, -2.0)), (419, 1699));
     }
 
     #[test]
@@ -1008,14 +1112,14 @@ mod tests {
             y_dip: 120.0,
         };
         for (dpi, want) in [
-            (96, (-1820, 120, 71, 30)),
-            (120, (-1795, 150, 89, 38)),
-            (144, (-1770, 180, 107, 45)),
-            (168, (-1745, 210, 124, 53)),
+            (96, (-1820, 120, 72, 34)),
+            (120, (-1795, 150, 90, 43)),
+            (144, (-1770, 180, 108, 51)),
+            (168, (-1745, 210, 126, 60)),
         ] {
             assert_eq!(global_frame(Some(&saved), (-1920, 0, 0, 1080), dpi), want);
         }
-        assert_eq!(global_frame(None, (0, 0, 800, 600), 96), (713, 554, 71, 30));
+        assert_eq!(global_frame(None, (0, 0, 800, 600), 96), (712, 550, 72, 34));
         let offscreen = GlobalPosition {
             x_dip: 9999.0,
             y_dip: 9999.0,
@@ -1023,7 +1127,7 @@ mod tests {
         };
         assert_eq!(
             global_frame(Some(&offscreen), (0, 0, 800, 600), 96),
-            (729, 570, 71, 30)
+            (728, 566, 72, 34)
         );
     }
 

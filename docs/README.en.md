@@ -16,9 +16,9 @@ Keep your remaining quota in view without leaving your work. The badge sits alon
 
 ## Download
 
-**v0.3.0** · Windows 10 / 11 x64 · Release
+**v0.3.1** · Windows 10 / 11 x64 · Release
 
-[**Installer (recommended)**](https://github.com/returnk/codex-usage-badge/releases/download/v0.3.0/CodexBadge-v0.3.0-windows-x64-setup.exe) · [Portable ZIP](https://github.com/returnk/codex-usage-badge/releases/download/v0.3.0/CodexBadge-v0.3.0-windows-x64-portable.zip) · [Release notes](https://github.com/returnk/codex-usage-badge/releases/tag/v0.3.0) · [SHA-256](https://github.com/returnk/codex-usage-badge/releases/download/v0.3.0/SHA256SUMS.txt)
+[**Installer (recommended)**](https://github.com/returnk/codex-usage-badge/releases/download/v0.3.1/CodexBadge-v0.3.1-windows-x64-setup.exe) · [Portable ZIP](https://github.com/returnk/codex-usage-badge/releases/download/v0.3.1/CodexBadge-v0.3.1-windows-x64-portable.zip) · [Release notes](https://github.com/returnk/codex-usage-badge/releases/tag/v0.3.1) · [SHA-256](https://github.com/returnk/codex-usage-badge/releases/download/v0.3.1/SHA256SUMS.txt)
 
 Requires WebView2 Runtime, the signed-in Codex Windows desktop app, and a working Codex CLI. The installer can download WebView2 if needed. No .NET runtime required. The app is unsigned; Windows may show a security warning. Download only from this repository.
 
@@ -38,18 +38,18 @@ Leave Codex Badge running in the background to follow Codex opening and closing.
 | Click **查看** | Show reset-credit expiry details, when available |
 | Mouse wheel | Switch **Glass / System**; System follows Windows light/dark appearance |
 | Drag | Move the badge; each display mode remembers its own position |
-| Right-click | Launch at login, always-on-top, reposition, or exit |
-| Double-click | Reset position in normal mode; retain position in always-on-top mode |
+| Right-click | Always-on-top, Settings submenu, or Exit; Settings contains launch at login and system notifications |
+| Double-click | Restore the default position for the current mode |
 
 Normal mode hides when Codex is minimized. Always-on-top mode remains visible while Codex is minimized. Both modes hide when Codex exits. The current app interface is in Chinese.
 
 ## Help
 
-- **Badge missing?** Check that Codex Badge is running and the Codex window is open. Try **重新定位** (Reposition) from the tray menu.
+- **Badge missing?** Check that Codex Badge is running and the ChatGPT/Codex window is open. v0.3.1 adapts anchor discovery to the new ChatGPT layout. Double-click the badge to restore its default position.
 - **`--%`?** Check your Codex sign-in and CLI. If the CLI cannot be found, set `CODEX_BADGE_CLI` to the full path of `codex.exe`.
 - **Updating or moving the portable app?** Disable launch at login, exit the running copy, then launch the new copy and re-enable it if needed. When upgrading from v0.2.x, configure your theme and position again.
 
-Rapid hovering may briefly show visual artifacts. Installer upgrades, display scaling, and multi-monitor behavior are still being validated. More details are in the [release notes (Chinese)](../CodexBadge.Tauri/docs/releases/v0.3.0.md).
+This update fixes badge placement after the ChatGPT layout change and shares smooth, buffered rendering across native menus and hints. Interactive checks used 125% display scaling; other DPI settings, multi-monitor behavior, and installer upgrades remain under validation. More details are in the [release notes (Chinese)](../CodexBadge.Tauri/docs/releases/v0.3.1.md).
 
 ## Privacy and feedback
 

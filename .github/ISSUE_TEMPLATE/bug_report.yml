@@ -22,7 +22,7 @@ body:
     id: version
     attributes:
       label: 余量版本 / Badge version
-      placeholder: v0.3.0
+      placeholder: v0.3.1
     validations:
       required: true
   - type: input

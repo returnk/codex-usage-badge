@@ -2,9 +2,13 @@
 
 mod diagnostics;
 mod domain;
+mod input;
 mod native;
+mod popup;
 mod quota;
+mod reminders;
 mod settings;
+mod tray;
 
 use domain::{Settings, Snapshot};
 use serde_json::{json, Value};
@@ -13,7 +17,6 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 use std::time::{SystemTime, UNIX_EPOCH};
-use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter, Manager, State};
 
 #[derive(Default)]
@@ -24,6 +27,7 @@ struct Shared {
 }
 
 struct Model {
+    detail_content_height: Option<f64>,
     windows: [isize; 4],
     ready: [bool; 4],
     created_at: [Option<Instant>; 4],
@@ -34,9 +38,10 @@ struct Model {
     anchor_generation: u64,
     last_host_frame: Option<(i32, i32, i32, i32)>,
     last_focus: Option<(isize, u32, u32, isize)>,
-    last_data_signature: Option<(String, Option<u64>, usize)>,
+    last_data_signature: Option<(String, Option<u64>, usize, i64)>,
     anchor: Option<(i32, i32)>,
     anchor_frame: Option<(i32, i32, i32, i32)>,
+    navigation: Option<domain::Rect>,
     pending_anchor: Option<(i32, i32)>,
     anchor_samples: u8,
     missing_anchor_samples: u8,
@@ -63,6 +68,7 @@ struct Model {
     menu_entered: bool,
     menu_observe_at: Option<Instant>,
     menu_resize_failed_logged: bool,
+    #[cfg(test)]
     menu_origin: Option<(i32, i32)>,
     menu_from_capsule: bool,
     last_theme_change: Option<Instant>,
@@ -75,6 +81,7 @@ struct Model {
 impl Default for Model {
     fn default() -> Self {
         Self {
+            detail_content_height: None,
             windows: [0; 4],
             ready: [false; 4],
             created_at: [None; 4],
@@ -88,6 +95,7 @@ impl Default for Model {
             last_data_signature: None,
             anchor: None,
             anchor_frame: None,
+            navigation: None,
             pending_anchor: None,
             anchor_samples: 0,
             missing_anchor_samples: 0,
@@ -114,6 +122,7 @@ impl Default for Model {
             menu_entered: false,
             menu_observe_at: None,
             menu_resize_failed_logged: false,
+            #[cfg(test)]
             menu_origin: None,
             menu_from_capsule: false,
             last_theme_change: None,
@@ -267,6 +276,14 @@ fn layout(m: &mut Model, app: &AppHandle) {
     if m.drag.is_some() {
         return;
     }
+    if app
+        .try_state::<tray::TrayHandle>()
+        .is_some_and(|tray| tray.popup_visible())
+    {
+        m.detail_hover_blocked = true;
+        hide_flyouts(m);
+        return;
+    }
     let anchor = if native::is_visible(m.owner) && !native::is_minimized(m.owner) {
         m.anchor
     } else {
@@ -311,26 +328,44 @@ fn layout(m: &mut Model, app: &AppHandle) {
     } else {
         domain::capsule_frame(&m.settings, anchor, reference_dpi, m.last_capsule)
     };
-    let Some((reference_x, reference_y, _, _)) = frame else {
+    let Some((reference_x, reference_y, frame_width, frame_height)) = frame else {
         hide_all(m);
         return;
     };
     let inset = domain::dip_to_px(2.0, reference_dpi);
     let (origin_x, origin_y) = (reference_x + inset, reference_y + inset);
-    let dpi = native::dpi_at((origin_x + 33, origin_y + 13));
+    let dpi = native::dpi_at((origin_x + frame_width / 2, origin_y + frame_height / 2));
     let size = |value: f64| domain::dip_to_px(value, dpi);
-    let capsule_w = size(67.0);
-    let capsule_h = size(26.0);
+    let (width_dip, height_dip) = if m.settings.always_on_top {
+        (72.0, 34.0)
+    } else {
+        (30.0, 30.0)
+    };
+    let capsule_w = size(width_dip - 4.0);
+    let capsule_h = size(height_dip - 4.0);
     let (outer_x, outer_y, _, _) = domain::capsule_window_rect(origin_x, origin_y, dpi);
-    let outer_w = size(71.0);
-    let outer_h = size(30.0);
-    let (outer_x, outer_y) = native::clamp_to_work_area(
+    let outer_w = size(width_dip);
+    let outer_h = size(height_dip);
+    let (mut outer_x, mut outer_y) = native::clamp_to_work_area(
         outer_x,
         outer_y,
         outer_w,
         outer_h,
         (outer_x + outer_w / 2, outer_y + outer_h / 2),
     );
+    if !m.settings.always_on_top {
+        if let (Some(nav), Some(anchor)) = (m.navigation, anchor) {
+            let margin = size(2.0);
+            outer_x = outer_x.clamp(
+                nav.0 + margin,
+                (nav.0 + nav.2 - margin - outer_w).max(nav.0 + margin),
+            );
+            outer_y = outer_y.clamp(
+                nav.1 + margin,
+                (anchor.1 - size(10.0) - outer_h).max(nav.1 + margin),
+            );
+        }
+    }
     let x = outer_x + size(2.0);
     let y = outer_y + size(2.0);
     let placement = (outer_x, outer_y, outer_w, outer_h);
@@ -383,12 +418,39 @@ fn layout(m: &mut Model, app: &AppHandle) {
         hide_flyouts(m);
         return;
     };
-    let Some((detail_x, detail_y, detail_w, detail_h)) = domain::place_detail_popup(
+    let area = popup_area(m, monitor.area, dpi);
+    let mut avoid = vec![placement];
+    if !m.settings.always_on_top {
+        avoid.extend(m.navigation);
+    }
+    let available_width = m
+        .navigation
+        .filter(|_| !m.settings.always_on_top)
+        .map_or(area.2 - area.0, |nav| area.2 - nav.0 - nav.2 - size(6.0));
+    let detail_width = size(270.0).min(available_width.max(size(160.0)));
+    let fresh = domain::quota_freshness(
+        m.snapshot.as_ref().map(|s| s.fetched_at),
+        m.quota_failed,
+        epoch_now(),
+    ) == "fresh";
+    let hints = reminders::hints(m.snapshot.as_ref(), fresh, epoch_now());
+    let extra_height = hints.messages.len() as f64 * 28.0 + if fresh { 0.0 } else { 22.0 };
+    let Some((detail_x, detail_y, detail_w, detail_h)) = domain::place_popup(
         placement,
-        (size(270.0), size(148.0)),
-        monitor.area,
+        (
+            detail_width,
+            size(
+                m.detail_content_height
+                    .unwrap_or(if detail_width < size(260.0) {
+                        180.0 + extra_height
+                    } else {
+                        152.0 + extra_height
+                    }),
+            ),
+        ),
+        area,
+        &avoid,
         size(6.0),
-        dpi,
     ) else {
         hide_flyouts(m);
         return;
@@ -445,11 +507,12 @@ fn layout(m: &mut Model, app: &AppHandle) {
             m.credit_visible = false;
             return;
         }
-        let Some((credit_x, credit_y, credit_w, credit_h)) = domain::place_popup(
+        avoid.push((detail_x, detail_y, detail_w, detail_h));
+        let Some((credit_x, credit_y, credit_w, credit_h)) = domain::place_vertical_popup(
             (detail_x, detail_y, detail_w, detail_h),
             (size(205.0), size(domain::credit_popup_height(count))),
-            monitor.area,
-            &[placement, (detail_x, detail_y, detail_w, detail_h)],
+            area,
+            &avoid,
             size(6.0),
         ) else {
             native::hide(m.windows[2]);
@@ -513,6 +576,9 @@ fn forget_windows(m: &mut Model, indices: std::ops::Range<usize>) {
         m.ready_timeout[index] = false;
         if index == 0 {
             m.last_capsule = None;
+        }
+        if index == 1 {
+            m.detail_content_height = None;
         }
         if index == 3 {
             m.menu_visible = false;
@@ -584,6 +650,11 @@ fn track_badge_frame(shared: &Arc<Shared>, app: &AppHandle) {
     }
 
     let capsule_hwnd = m.windows[0];
+    let dimensions = if m.settings.always_on_top {
+        (72.0, 34.0)
+    } else {
+        (30.0, 30.0)
+    };
     if let Some(drag) = &mut m.drag {
         if native::left_mouse_down() {
             if let Some(cursor) = native::cursor() {
@@ -600,7 +671,10 @@ fn track_badge_frame(shared: &Arc<Shared>, app: &AppHandle) {
                 );
                 if pos != drag.last {
                     let dpi = native::dpi_at((pos.0 + drag.size.0 / 2, pos.1 + drag.size.1 / 2));
-                    let size = (domain::dip_to_px(71.0, dpi), domain::dip_to_px(30.0, dpi));
+                    let size = (
+                        domain::dip_to_px(dimensions.0, dpi),
+                        domain::dip_to_px(dimensions.1, dpi),
+                    );
                     resize_move(app, "capsule", capsule_hwnd, pos.0, pos.1, size.0, size.1);
                     if size != drag.size {
                         native::round_capsule(capsule_hwnd, size.0, size.1);
@@ -751,6 +825,7 @@ fn track_badge_frame(shared: &Arc<Shared>, app: &AppHandle) {
         .to_string(),
         domain::credit_count(m.snapshot.as_ref(), epoch_now()),
         active_credits(&m).len(),
+        epoch_now() / 60,
     );
     let data_changed = m.last_data_signature.as_ref() != Some(&signature);
     m.last_data_signature = Some(signature);
@@ -772,6 +847,11 @@ fn update_host_frame(m: &mut Model, frame: Option<(i32, i32, i32, i32)>) {
         if let (Some((x, y)), Some(source)) = (&mut m.anchor, m.anchor_frame) {
             *x += frame.0 - source.0;
             *y += (frame.1 + frame.3) - (source.1 + source.3);
+            if let Some(nav) = &mut m.navigation {
+                nav.0 += frame.0 - source.0;
+                nav.1 += frame.1 - source.1;
+                nav.3 += frame.3 - source.3;
+            }
             m.anchor_frame = Some(frame);
         }
         m.anchor_generation += 1;
@@ -820,6 +900,30 @@ fn expire_pending_menu(m: &mut Model, now: Instant) -> bool {
 fn track_menu_frame(shared: &Arc<Shared>, app: &AppHandle) {
     let mut m = shared.inner.lock().unwrap();
     expire_pending_menu(&mut m, Instant::now());
+    if m.menu_visible && m.menu_from_capsule {
+        if let Some(capsule) = m.last_capsule {
+            let point = (capsule.0 + capsule.2 / 2, capsule.1 + capsule.3 / 2);
+            if let Some(monitor) = native::monitor_at(point) {
+                let dpi = native::dpi_at(point);
+                let mut avoid = vec![capsule];
+                if !m.settings.always_on_top {
+                    avoid.extend(m.navigation);
+                }
+                if let Some(rect) = domain::place_popup(
+                    capsule,
+                    (domain::dip_to_px(190.0, dpi), domain::dip_to_px(116.0, dpi)),
+                    popup_area(&m, monitor.area, dpi),
+                    &avoid,
+                    domain::dip_to_px(6.0, dpi),
+                ) {
+                    resize_move(app, "menu", m.windows[3], rect.0, rect.1, rect.2, rect.3);
+                } else {
+                    let request_id = m.menu_request_id;
+                    close_menu(&mut m, request_id);
+                }
+            }
+        }
+    }
     if m.windows[3] != 0
         && (!native::is_window(m.windows[3]) || (m.ready_timeout[3] && m.menu_target.is_some()))
     {
@@ -1033,7 +1137,7 @@ fn probe_anchor(shared: Arc<Shared>) {
                 last_scan = Instant::now() - Duration::from_secs(60);
             }
             let recovering = Instant::now() < recovery_until;
-            if anchor.is_none()
+            if (anchor.is_none() || !probe.has_avatar())
                 && domain::anchor_scan_due(
                     Instant::now(),
                     last_scan,
@@ -1066,13 +1170,16 @@ fn probe_anchor(shared: Arc<Shared>) {
                 point: anchor,
             };
             let mut m = shared.inner.lock().unwrap();
-            commit_anchor_sample(
+            let committed = commit_anchor_sample(
                 &mut m,
                 sample,
                 native::host_frame(owner),
                 Instant::now(),
                 recovery_until,
             );
+            if committed {
+                m.navigation = probe.navigation;
+            }
         }
         thread::sleep(Duration::from_millis(250));
     }
@@ -1186,7 +1293,13 @@ fn get_state(state: State<'_, Arc<Shared>>) -> Value {
     } else {
         active_credits(&m)
     };
+    let hints = reminders::hints(snapshot, freshness == "fresh", epoch_now());
     json!({
+        "hintLevel": hints.level,
+        "hintMessages": hints.messages,
+        "countdown": reminders::countdown(five.and_then(|w| w.resets_at), epoch_now()),
+        "notificationsEnabled": m.settings.notifications_enabled,
+        "updatedAt": reminders::updated_at(m.snapshot.as_ref().map(|s| s.fetched_at)),
         "theme": m.settings.theme,
         "capsule": domain::capsule_text(remaining),
         "fiveHour": five.map(|w| w.remaining),
@@ -1202,7 +1315,7 @@ fn get_state(state: State<'_, Arc<Shared>>) -> Value {
         "startup": m.settings.start_with_windows,
         "topmost": m.settings.always_on_top,
         "freshness": freshness,
-        "fetchedAt": snapshot.map(|s| s.fetched_at),
+        "fetchedAt": m.snapshot.as_ref().map(|s| s.fetched_at),
         "diagnosticsHealthy": diagnostics::healthy(),
         "defaultCursor": diagnostics::default_cursor(),
         "menuRequestId": m.menu_request_id,
@@ -1236,6 +1349,24 @@ fn report_capsule_layout(
 }
 
 #[tauri::command]
+fn set_input_regions(buttons: Vec<[f64; 4]>, draggable: bool, window: tauri::WebviewWindow) {
+    if let Ok(hwnd) = window.hwnd() {
+        input::set_regions(
+            hwnd.0 as isize,
+            buttons,
+            draggable && window.label() == "capsule",
+        );
+    }
+}
+
+#[tauri::command]
+fn report_detail_height(height: f64, state: State<'_, Arc<Shared>>, window: tauri::WebviewWindow) {
+    if window.label() == "detail" && height.is_finite() && (100.0..=600.0).contains(&height) {
+        state.inner.lock().unwrap().detail_content_height = Some(height);
+    }
+}
+
+#[tauri::command]
 fn window_ready(window: tauri::WebviewWindow, state: State<'_, Arc<Shared>>) -> bool {
     let Some(index) = ["capsule", "detail", "credit", "menu"]
         .iter()
@@ -1252,6 +1383,18 @@ fn window_ready(window: tauri::WebviewWindow, state: State<'_, Arc<Shared>>) -> 
     }
     if native::guard_webview_children(hwnd.0 as isize).is_err() {
         return false;
+    }
+    if !m.ready[index] {
+        let handle = window.app_handle().clone();
+        let label = window.label().to_string();
+        let event = format!("native-input-{label}");
+        if input::attach(hwnd.0 as isize, move |input| {
+            let _ = handle.emit_to(&label, &event, input);
+        })
+        .is_err()
+        {
+            return false;
+        }
     }
     m.ready[index] = true;
     m.ready_timeout[index] = false;
@@ -1276,6 +1419,7 @@ fn cycle_theme(delta: i32, state: State<'_, Arc<Shared>>, app: AppHandle) {
     let settings = m.settings.clone();
     drop(m);
     let _ = settings::save(&settings);
+    sync_tray(&app, &settings);
     let _ = app.emit("state-updated", ());
 }
 
@@ -1289,10 +1433,7 @@ fn reset_position(from_capsule: Option<bool>, state: State<'_, Arc<Shared>>) {
     }
 }
 
-fn reset_position_model(m: &mut Model, from_capsule: bool) -> Option<Settings> {
-    if from_capsule && m.settings.always_on_top {
-        return None;
-    }
+fn reset_position_model(m: &mut Model, _from_capsule: bool) -> Option<Settings> {
     if m.settings.always_on_top {
         let point = m
             .last_capsule
@@ -1311,6 +1452,10 @@ fn reset_position_model(m: &mut Model, from_capsule: bool) -> Option<Settings> {
 
 #[tauri::command]
 fn toggle_startup(state: State<'_, Arc<Shared>>, app: AppHandle) -> bool {
+    change_startup(state.inner(), &app)
+}
+
+fn change_startup(state: &Arc<Shared>, app: &AppHandle) -> bool {
     let desired = !state.inner.lock().unwrap().settings.start_with_windows;
     if settings::set_startup(desired).is_ok() {
         let mut m = state.inner.lock().unwrap();
@@ -1318,6 +1463,7 @@ fn toggle_startup(state: State<'_, Arc<Shared>>, app: AppHandle) -> bool {
         let settings = m.settings.clone();
         drop(m);
         let _ = settings::save(&settings);
+        sync_tray(app, &settings);
         let _ = app.emit("state-updated", ());
     }
     state.inner.lock().unwrap().settings.start_with_windows
@@ -1325,6 +1471,10 @@ fn toggle_startup(state: State<'_, Arc<Shared>>, app: AppHandle) -> bool {
 
 #[tauri::command]
 fn toggle_topmost(state: State<'_, Arc<Shared>>, app: AppHandle) -> Result<bool, String> {
+    change_topmost(state.inner(), &app)
+}
+
+fn change_topmost(state: &Arc<Shared>, app: &AppHandle) -> Result<bool, String> {
     let (desired, owner, windows, previous) = {
         let m = state.inner.lock().unwrap();
         (
@@ -1357,6 +1507,7 @@ fn toggle_topmost(state: State<'_, Arc<Shared>>, app: AppHandle) -> Result<bool,
         diagnostics::record(format!("topmost_save_failed {error}"));
         return Err(error);
     }
+    sync_tray(app, &settings);
     diagnostics::record(format!(
         "topmost_applied enabled={desired} owner={} visible={}",
         native::owner(windows[0]),
@@ -1364,6 +1515,77 @@ fn toggle_topmost(state: State<'_, Arc<Shared>>, app: AppHandle) -> Result<bool,
     ));
     let _ = app.emit("state-updated", ());
     Ok(desired)
+}
+
+fn sync_tray(app: &AppHandle, settings: &Settings) {
+    if let Some(tray) = app.try_state::<tray::TrayHandle>() {
+        tray.sync(
+            settings.start_with_windows,
+            settings.always_on_top,
+            settings.notifications_enabled,
+            popup_dark(settings),
+        );
+    }
+}
+
+fn popup_dark(settings: &Settings) -> bool {
+    settings.theme == domain::Theme::System
+        && winreg::RegKey::predef(winreg::enums::HKEY_CURRENT_USER)
+            .open_subkey("Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize")
+            .and_then(|key| key.get_value::<u32, _>("AppsUseLightTheme"))
+            .is_ok_and(|value| value == 0)
+}
+
+#[tauri::command]
+fn toggle_notifications(state: State<'_, Arc<Shared>>, app: AppHandle) -> Result<bool, String> {
+    change_notifications(state.inner(), &app)
+}
+
+fn change_notifications(state: &Arc<Shared>, app: &AppHandle) -> Result<bool, String> {
+    let mut m = state.inner.lock().unwrap();
+    let previous = m.settings.notifications_enabled;
+    m.settings.notifications_enabled = !previous;
+    if let Err(error) = settings::save(&m.settings) {
+        m.settings.notifications_enabled = previous;
+        return Err(error);
+    }
+    drop(m);
+    let settings = state.inner.lock().unwrap().settings.clone();
+    sync_tray(app, &settings);
+    deliver_reminder(state, app);
+    let _ = app.emit("state-updated", ());
+    Ok(!previous)
+}
+
+fn deliver_reminder(shared: &Arc<Shared>, app: &AppHandle) {
+    let mut m = shared.inner.lock().unwrap();
+    let fresh = domain::quota_freshness(
+        m.snapshot.as_ref().map(|s| s.fetched_at),
+        m.quota_failed,
+        epoch_now(),
+    ) == "fresh";
+    let mut next = m.settings.reminder_state.clone();
+    let Some(message) = next.observe(m.snapshot.as_ref(), fresh, m.settings.notifications_enabled)
+    else {
+        return;
+    };
+    let previous = m.settings.reminder_state.clone();
+    m.settings.reminder_state = next;
+    if settings::save(&m.settings).is_err() {
+        m.settings.reminder_state = previous;
+        diagnostics::record("reminder_save_failed");
+        return;
+    }
+    let submitted = app
+        .try_state::<tray::TrayHandle>()
+        .is_some_and(|tray| tray.notify(&message).is_ok());
+    if submitted {
+        diagnostics::record("reminder_submitted");
+    } else {
+        m.settings.reminder_state = previous;
+        let _ = settings::save(&m.settings);
+        diagnostics::record("reminder_delivery_failed");
+    }
 }
 
 #[tauri::command]
@@ -1387,15 +1609,34 @@ fn close_menu(m: &mut Model, request_id: u64) {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
+#[cfg(test)]
 enum MenuSource {
     Tray,
     Capsule,
 }
 
+fn popup_area(m: &Model, work: domain::Rect, dpi: u32) -> domain::Rect {
+    if m.settings.always_on_top {
+        return work;
+    }
+    let Some((x, y, w, h)) = native::host_frame(m.owner) else {
+        return work;
+    };
+    let inset = domain::dip_to_px(8.0, dpi);
+    (
+        work.0.max(x + inset),
+        work.1.max(y + inset),
+        work.2.min(x + w - inset),
+        work.3.min(y + h - inset),
+    )
+}
+
+// Keep the previous WebView menu model for lifecycle regression comparisons.
+#[cfg(test)]
 fn request_menu(m: &mut Model, point: (i32, i32), source: MenuSource) {
     m.menu_request_id = m.menu_request_id.wrapping_add(1);
     let dpi = native::dpi_at(point);
-    let (width, height) = (domain::dip_to_px(190.0, dpi), domain::dip_to_px(148.0, dpi));
+    let (width, height) = (domain::dip_to_px(190.0, dpi), domain::dip_to_px(116.0, dpi));
     let (x, y) = native::clamp_to_work_area(
         point.0 - width + domain::dip_to_px(16.0, dpi),
         point.1 - height + domain::dip_to_px(8.0, dpi),
@@ -1405,6 +1646,10 @@ fn request_menu(m: &mut Model, point: (i32, i32), source: MenuSource) {
     );
     let target = if let (Some(capsule), Some(monitor)) = (m.last_capsule, native::monitor_at(point))
     {
+        let mut avoid = vec![capsule];
+        if source == MenuSource::Capsule && !m.settings.always_on_top {
+            avoid.extend(m.navigation);
+        }
         domain::place_popup(
             if source == MenuSource::Capsule {
                 capsule
@@ -1412,8 +1657,12 @@ fn request_menu(m: &mut Model, point: (i32, i32), source: MenuSource) {
                 (point.0, point.1, 1, 1)
             },
             (width, height),
-            monitor.area,
-            &[capsule],
+            if source == MenuSource::Capsule {
+                popup_area(m, monitor.area, dpi)
+            } else {
+                monitor.area
+            },
+            &avoid,
             domain::dip_to_px(6.0, dpi),
         )
     } else {
@@ -1443,9 +1692,24 @@ fn request_menu(m: &mut Model, point: (i32, i32), source: MenuSource) {
 }
 
 #[tauri::command]
-fn open_capsule_menu(state: State<'_, Arc<Shared>>) {
+fn open_capsule_menu(state: State<'_, Arc<Shared>>, app: AppHandle) {
     if let Some(point) = native::cursor() {
-        request_menu(&mut state.inner.lock().unwrap(), point, MenuSource::Capsule);
+        let mut m = state.inner.lock().unwrap();
+        hide_flyouts(&mut m);
+        if let Some(tray) = app.try_state::<tray::TrayHandle>() {
+            tray.open(point, m.last_capsule, false);
+        }
+    }
+}
+
+#[tauri::command]
+fn open_settings(state: State<'_, Arc<Shared>>, app: AppHandle) {
+    if let Some(point) = native::cursor() {
+        let mut m = state.inner.lock().unwrap();
+        hide_flyouts(&mut m);
+        if let Some(tray) = app.try_state::<tray::TrayHandle>() {
+            tray.open(point, m.last_capsule, true);
+        }
     }
 }
 
@@ -1527,34 +1791,35 @@ fn main() {
                 let mut m = shared.inner.lock().unwrap();
                 m.settings = settings::load();
             }
-            if let Some(icon) = app.default_window_icon().cloned() {
-                let tray_shared = shared.clone();
-                TrayIconBuilder::new()
-                    .icon(icon)
-                    .tooltip("Codex Badge")
-                    .show_menu_on_left_click(false)
-                    .on_tray_icon_event(move |_tray, event| {
-                        if let TrayIconEvent::Click {
-                            button: MouseButton::Right,
-                            button_state,
-                            position,
-                            ..
-                        } = event
-                        {
-                            diagnostics::record(format!(
-                                "tray_right state={button_state:?} position={},{}",
-                                position.x, position.y
-                            ));
-                            if button_state != MouseButtonState::Up {
-                                return;
-                            }
-                            let mut m = tray_shared.inner.lock().unwrap();
-                            let cursor = (position.x as i32, position.y as i32);
-                            request_menu(&mut m, cursor, MenuSource::Tray);
-                        }
-                    })
-                    .build(app)?;
+            let handle = app.handle().clone();
+            let tray_shared = shared.clone();
+            let native_tray = tray::start(move |action| {
+                let shared = tray_shared.clone();
+                let callback_app = handle.clone();
+                let _ = handle.run_on_main_thread(move || match action {
+                    tray::TrayAction::Startup => {
+                        change_startup(&shared, &callback_app);
+                    }
+                    tray::TrayAction::Topmost => {
+                        let _ = change_topmost(&shared, &callback_app);
+                    }
+                    tray::TrayAction::Notifications => {
+                        let _ = change_notifications(&shared, &callback_app);
+                    }
+                    tray::TrayAction::Exit => callback_app.exit(0),
+                });
+            })
+            .map_err(std::io::Error::other)?;
+            {
+                let m = shared.inner.lock().unwrap();
+                native_tray.sync(
+                    m.settings.start_with_windows,
+                    m.settings.always_on_top,
+                    m.settings.notifications_enabled,
+                    popup_dark(&m.settings),
+                );
             }
+            app.manage(native_tray);
             app.manage(shared.clone());
             thread::spawn({
                 let s = shared.clone();
@@ -1572,17 +1837,21 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             get_state,
             report_capsule_layout,
+            set_input_regions,
+            report_detail_height,
             window_ready,
             cycle_theme,
             reset_position,
             toggle_startup,
+            toggle_notifications,
             toggle_topmost,
             hide_menu,
             exit_app,
             toggle_credit,
             start_drag,
             stop_drag,
-            open_capsule_menu
+            open_capsule_menu,
+            open_settings
         ])
         .build(tauri::generate_context!())
         .expect("Codex Badge failed")
@@ -1700,7 +1969,7 @@ mod stability_tests {
     }
 
     #[test]
-    fn backend_rejects_a_stale_normal_double_click_after_topmost_was_enabled() {
+    fn both_modes_accept_capsule_double_click_reset() {
         let mut m = Model::default();
         m.settings.always_on_top = true;
         m.settings.global_position = Some(domain::GlobalPosition {
@@ -1708,14 +1977,8 @@ mod stability_tests {
             x_dip: 17.0,
             y_dip: 25.0,
         });
-        assert!(reset_position_model(&mut m, true).is_none());
-        assert_eq!(
-            m.settings
-                .global_position
-                .as_ref()
-                .map(|p| (p.x_dip, p.y_dip)),
-            Some((17.0, 25.0))
-        );
+        assert!(reset_position_model(&mut m, true).is_some());
+        let global_position = m.settings.global_position.clone();
         m.settings.always_on_top = false;
         m.settings.offset_x = 42.0;
         m.settings.offset_y = -9.0;
@@ -1726,7 +1989,7 @@ mod stability_tests {
                 .global_position
                 .as_ref()
                 .map(|p| (p.x_dip, p.y_dip)),
-            Some((17.0, 25.0))
+            global_position.map(|p| (p.x_dip, p.y_dip))
         );
     }
     #[test]

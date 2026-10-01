@@ -60,6 +60,9 @@ fn sanitize_event(event: &str) -> String {
             | "quota_snapshot"
             | "popup_no_space"
             | "frame_slow"
+            | "reminder_save_failed"
+            | "reminder_delivery_failed"
+            | "reminder_submitted"
     ) {
         return "invalid_event".into();
     }

@@ -315,6 +315,7 @@ pub fn run(shared: Arc<Shared>, app: AppHandle) {
                             m.quota_status.clear();
                         }
                         let _ = app.emit("state-updated", ());
+                        crate::deliver_reminder(&shared, &app);
                         failures = 0;
                         next_read = Instant::now() + Duration::from_secs(60);
                         if server.pending_update {

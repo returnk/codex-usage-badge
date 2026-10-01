@@ -1,7 +1,7 @@
 use std::ffi::c_void;
 use std::path::Path;
 use uiautomation::{
-    types::{Handle, PropertyConditionFlags, TreeScope, UIProperty},
+    types::{ControlType, Handle, PropertyConditionFlags, TreeScope, UIProperty},
     UIAutomation, UIElement,
 };
 use windows::core::{BOOL, PWSTR};
@@ -783,13 +783,22 @@ fn is_sidebar_container(frame: RECT, scale: f64, rect: uiautomation::types::Rect
 pub struct AnchorProbe {
     cached: Option<UIElement>,
     owner: isize,
+    avatar: Option<UIElement>,
+    column: Option<UIElement>,
+    pub navigation: Option<crate::domain::Rect>,
 }
 
 impl AnchorProbe {
+    pub fn has_avatar(&self) -> bool {
+        self.avatar.is_some()
+    }
     pub fn new() -> Self {
         Self {
             cached: None,
             owner: 0,
+            avatar: None,
+            column: None,
+            navigation: None,
         }
     }
 
@@ -797,24 +806,126 @@ impl AnchorProbe {
         if self.owner != owner {
             self.owner = owner;
             self.cached = None;
+            self.avatar = None;
+            self.column = None;
+            self.navigation = None;
         }
         let frame = frame_bounds(owner)?;
         let scale = dpi(owner) as f64 / 96.0;
+        if let (Some(avatar), Some(column)) = (&self.avatar, &self.column) {
+            let avatar_rect = avatar.get_bounding_rectangle().ok()?;
+            let column_rect = column.get_bounding_rectangle().ok()?;
+            if avatar.is_offscreen().unwrap_or(true)
+                || !is_avatar_column(frame, scale, avatar_rect, column_rect)
+            {
+                self.avatar = None;
+                self.column = None;
+                self.navigation = None;
+                return None;
+            }
+            self.navigation = Some((
+                column_rect.get_left(),
+                column_rect.get_top(),
+                column_rect.get_right() - column_rect.get_left(),
+                column_rect.get_bottom() - column_rect.get_top(),
+            ));
+            return Some((
+                (avatar_rect.get_left() + avatar_rect.get_right()) / 2,
+                avatar_rect.get_top(),
+            ));
+        }
         let rect = self.cached.as_ref()?.get_bounding_rectangle().ok()?;
-        if !is_sidebar_container(frame, scale, rect) {
+        let valid = is_sidebar_container(frame, scale, rect);
+        if !valid {
             self.cached = None;
             return None;
         }
-        Some((rect.get_right(), rect.get_bottom()))
+        Some(legacy_anchor_point(rect, scale))
     }
 
     pub fn discover(&mut self, automation: &UIAutomation, owner: isize) -> Option<(i32, i32)> {
         self.owner = owner;
         self.cached = None;
+        self.avatar = None;
+        self.column = None;
+        self.navigation = None;
+        if let Some((avatar, column)) = avatar_anchor(automation, owner) {
+            self.avatar = Some(avatar);
+            self.column = Some(column);
+            return self.read_cached(owner);
+        }
         let (element, point) = voice_anchor(automation, owner)?;
         self.cached = Some(element);
         Some(point)
     }
+}
+
+fn is_avatar_column(
+    frame: RECT,
+    scale: f64,
+    avatar: uiautomation::types::Rect,
+    column: uiautomation::types::Rect,
+) -> bool {
+    let width = column.get_right() - column.get_left();
+    (column.get_left() - frame.left).abs() as f64 <= 8.0 * scale
+        && width as f64 >= 48.0 * scale
+        && width as f64 <= 100.0 * scale
+        && column.get_bottom() as f64 >= frame.bottom as f64 - 12.0 * scale
+        && avatar.get_left() >= column.get_left()
+        && avatar.get_right() <= column.get_right()
+        && avatar.get_top() > column.get_top()
+        && avatar.get_bottom() <= column.get_bottom()
+        && (avatar.get_bottom() - avatar.get_top()) as f64 >= 24.0 * scale
+        && (avatar.get_bottom() - avatar.get_top()) as f64 <= 64.0 * scale
+}
+
+fn avatar_anchor(automation: &UIAutomation, owner: isize) -> Option<(UIElement, UIElement)> {
+    let frame = frame_bounds(owner)?;
+    let scale = dpi(owner) as f64 / 96.0;
+    let root = automation.element_from_handle(Handle::from(owner)).ok()?;
+    let walker = automation.get_raw_view_walker().ok()?;
+    for name in [
+        "打开个人资料菜单",
+        "Open profile menu",
+        "Open personal profile menu",
+    ] {
+        let condition = automation
+            .create_property_condition(
+                UIProperty::Name,
+                name.into(),
+                Some(PropertyConditionFlags::IgnoreCase),
+            )
+            .ok()?;
+        for avatar in root.find_all(TreeScope::Descendants, &condition).ok()? {
+            if avatar.is_offscreen().unwrap_or(true)
+                || avatar.get_control_type().ok() != Some(ControlType::Button)
+            {
+                continue;
+            }
+            let avatar_rect = avatar.get_bounding_rectangle().ok()?;
+            let mut parent = avatar.clone();
+            for _ in 0..8 {
+                parent = match walker.get_parent(&parent) {
+                    Ok(parent) => parent,
+                    Err(_) => break,
+                };
+                if parent
+                    .get_bounding_rectangle()
+                    .is_ok_and(|rect| is_avatar_column(frame, scale, avatar_rect, rect))
+                {
+                    return Some((avatar, parent));
+                }
+            }
+        }
+    }
+    None
+}
+
+fn legacy_anchor_point(rect: uiautomation::types::Rect, scale: f64) -> (i32, i32) {
+    (
+        rect.get_right() - (23.0 * scale).round() as i32,
+        rect.get_bottom() + (3.0 * scale).round() as i32,
+    )
 }
 
 fn voice_anchor(automation: &UIAutomation, owner: isize) -> Option<(UIElement, (i32, i32))> {
@@ -856,7 +967,7 @@ fn voice_anchor(automation: &UIAutomation, owner: isize) -> Option<(UIElement, (
         for _ in 0..8 {
             if let Ok(rect) = parent.get_bounding_rectangle() {
                 if is_sidebar_container(frame, scale, rect) {
-                    anchor = Some((parent.clone(), (rect.get_right(), rect.get_bottom())));
+                    anchor = Some((parent.clone(), legacy_anchor_point(rect, scale)));
                 }
             }
             let Ok(next) = walker.get_parent(&parent) else {
@@ -874,6 +985,69 @@ fn voice_anchor(automation: &UIAutomation, owner: isize) -> Option<(UIElement, (
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn avatar_navigation_uses_real_column_and_rejects_chat_list_and_root() {
+        let frame = RECT {
+            left: 393,
+            top: 144,
+            right: 2055,
+            bottom: 1233,
+        };
+        let avatar = uiautomation::types::Rect::new(403, 1179, 448, 1224);
+        assert!(is_avatar_column(
+            frame,
+            1.25,
+            avatar,
+            uiautomation::types::Rect::new(393, 199, 458, 1229)
+        ));
+        for rect in [
+            uiautomation::types::Rect::new(393, 199, 818, 1229),
+            uiautomation::types::Rect::new(393, 144, 2055, 1233),
+        ] {
+            assert!(!is_avatar_column(frame, 1.25, avatar, rect));
+        }
+    }
+
+    #[test]
+    #[ignore = "requires the user's interactive desktop and running unified client"]
+    fn live_unified_anchor_discovery_and_cache_agree() {
+        use windows::Win32::UI::HiDpi::{
+            SetThreadDpiAwarenessContext, DPI_AWARENESS_CONTEXT,
+            DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
+        };
+        struct Awareness(DPI_AWARENESS_CONTEXT);
+        impl Drop for Awareness {
+            fn drop(&mut self) {
+                unsafe {
+                    SetThreadDpiAwarenessContext(self.0);
+                }
+            }
+        }
+        // Rust's test runner has no Tauri DPI setup. Match the production
+        // per-monitor awareness before comparing UIA and DWM physical pixels.
+        let _awareness = Awareness(unsafe {
+            SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2)
+        });
+        let owner = find_codex_window(0);
+        assert_ne!(owner, 0, "desktop client must be running");
+        let automation = UIAutomation::new().unwrap();
+        let mut probe = AnchorProbe::new();
+        let point = probe.discover(&automation, owner).expect("avatar anchor");
+        assert!(probe.avatar.is_some(), "must select the profile avatar");
+        assert!(probe.navigation.is_some());
+        assert_eq!(probe.read_cached(owner), Some(point));
+        let rect = crate::domain::capsule_frame(
+            &crate::domain::Settings::default(),
+            Some(point),
+            dpi(owner),
+            None,
+        )
+        .unwrap();
+        println!(
+            "owner={owner} anchor={point:?} capsule={rect:?} dpi={}",
+            dpi(owner)
+        );
+    }
     #[test]
     fn webview_child_guard_catches_a_child_that_does_not_forward_activation() {
         let _window_guard = WINDOW_TEST_LOCK.lock().unwrap();
