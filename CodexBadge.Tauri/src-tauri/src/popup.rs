@@ -242,8 +242,9 @@ unsafe fn paint_hint(window: HWND, state: &HintState, position: (i32, i32)) -> b
                 right: size.0,
                 bottom: size.1,
             };
-            background(dc, client, state.checks.dark.load(Ordering::Relaxed));
-            let dark = state.checks.dark.load(Ordering::Relaxed);
+            background(dc, client, state.checks.palette.load(Ordering::Relaxed));
+            let mode = state.checks.palette.load(Ordering::Relaxed);
+            let dark = mode == 2;
             let fg = COLORREF(if dark { 0x00b8afa8 } else { 0x00887766 });
             text(
                 dc,
@@ -335,6 +336,7 @@ pub fn refresh(raw: isize) {
         let _ = InvalidateRect(Some(HWND(raw as _)), None, false);
     }
 }
+#[cfg(test)]
 fn tray_position(
     anchor: domain::Rect,
     size: (i32, i32),
@@ -353,6 +355,24 @@ fn tray_position(
     } else {
         domain::clamp_to_work_area(left, size, area)
     }
+}
+fn pointer_position(
+    point: (i32, i32),
+    size: (i32, i32),
+    area: domain::Rect,
+    gap: i32,
+) -> (i32, i32) {
+    let x = if point.0 + gap + size.0 <= area.2 {
+        point.0 + gap
+    } else {
+        point.0 - size.0 - gap
+    };
+    let y = if point.1 - size.1 - gap >= area.1 {
+        point.1 - size.1 - gap
+    } else {
+        point.1 + gap
+    };
+    domain::clamp_to_work_area((x, y), size, area)
 }
 fn submenu_left(root: (i32, i32), width: i32, gap: i32, area: domain::Rect) -> bool {
     root.0 + width * 2 + gap > area.2
@@ -391,24 +411,17 @@ unsafe fn arrange(window: HWND, state: &mut State) {
         return;
     };
     let p = |v: f64| domain::dip_to_px(v, state.dpi);
-    let size = (p(180.0), p(118.0));
+    let size = (p(180.0), p(108.0));
     let root = state
         .tray_anchor
-        .map(|a| tray_position(a, size, monitor.area, p(6.0)))
+        .map(|_| pointer_position(state.anchor, size, monitor.area, p(2.0)))
         .or_else(|| {
             state
                 .avoid
                 .and_then(|cap| domain::place_popup(cap, size, monitor.area, &[cap], p(6.0)))
                 .map(|r| (r.0, r.1))
         })
-        .unwrap_or_else(|| {
-            tray_position(
-                (state.anchor.0, state.anchor.1, 1, 1),
-                size,
-                monitor.area,
-                p(6.0),
-            )
-        });
+        .unwrap_or_else(|| pointer_position(state.anchor, size, monitor.area, p(2.0)));
     // Reserve child clearance while collapsed so opening never moves the root.
     let root = state.avoid.map_or(root, |cap| {
         submenu_clearance(root, size, monitor.area, cap, p(6.0), p(184.0))
@@ -424,19 +437,21 @@ unsafe fn arrange(window: HWND, state: &mut State) {
 // Right-facing coordinates; a left-facing menu is mapped to this layout before hit testing.
 fn hit(expanded: bool, x: f64, y: f64) -> i32 {
     if expanded && (192.0..356.0).contains(&x) {
-        if (42.0..74.0).contains(&y) {
+        if (8.0..36.0).contains(&y) {
             3
-        } else if (76.0..108.0).contains(&y) {
+        } else if (38.0..66.0).contains(&y) {
             4
+        } else if (68.0..96.0).contains(&y) {
+            5
         } else {
             -1
         }
     } else if (8.0..172.0).contains(&x) {
-        if (8.0..40.0).contains(&y) {
+        if (8.0..36.0).contains(&y) {
             0
-        } else if (42.0..74.0).contains(&y) {
+        } else if (38.0..66.0).contains(&y) {
             1
-        } else if (80.0..112.0).contains(&y) {
+        } else if (74.0..102.0).contains(&y) {
             2
         } else {
             -1
@@ -463,9 +478,9 @@ fn local_hit(state: &State, x: f64, y: f64) -> i32 {
 fn inside_layout(expanded: bool, left: bool, x: f64, y: f64) -> bool {
     let root = if expanded && left { 184.0 } else { 0.0 };
     let child = if left { 0.0 } else { 184.0 };
-    ((root..root + 180.0).contains(&x) && (0.0..118.0).contains(&y))
-        || (expanded && ((child..child + 180.0).contains(&x) && (34.0..116.0).contains(&y)))
-        || (expanded && (180.0..184.0).contains(&x) && (42.0..108.0).contains(&y))
+    ((root..root + 180.0).contains(&x) && (0.0..108.0).contains(&y))
+        || (expanded && ((child..child + 180.0).contains(&x) && (0.0..108.0).contains(&y)))
+        || (expanded && (180.0..184.0).contains(&x) && (8.0..96.0).contains(&y))
 }
 unsafe fn hide(window: HWND, state: &mut State) {
     tip(window, state, false);
@@ -565,9 +580,10 @@ unsafe extern "system" fn window_proc(
                                 0 => TrayAction::Topmost,
                                 2 => TrayAction::Exit,
                                 3 => TrayAction::Startup,
-                                _ => TrayAction::Notifications,
+                                4 => TrayAction::Notifications,
+                                _ => TrayAction::CheckUpdate,
                             };
-                            if row < 3 {
+                            if row < 3 || row == 5 {
                                 hide(window, state);
                             }
                             let callback = state.callback.clone();
@@ -690,12 +706,59 @@ unsafe fn text(
     SelectObject(dc, previous);
     let _ = DeleteObject(HGDIOBJ(font.0));
 }
-unsafe fn background(dc: HDC, rect: RECT, dark: bool) {
-    let colors = if dark {
-        [(46u16, 50u16, 58u16), (34, 36, 41)]
+pub fn system_palette() -> usize {
+    if winreg::RegKey::predef(winreg::enums::HKEY_CURRENT_USER)
+        .open_subkey("Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize")
+        .and_then(|key| key.get_value::<u32, _>("AppsUseLightTheme"))
+        .is_ok_and(|value| value == 0)
+    {
+        2
     } else {
-        [(255u16, 255u16, 255u16), (226, 238, 252)]
-    };
+        1
+    }
+}
+#[derive(Clone, Copy)]
+struct MenuPalette {
+    top: (u16, u16, u16),
+    bottom: (u16, u16, u16),
+    foreground: COLORREF,
+    hover: COLORREF,
+    separator: COLORREF,
+    accent: COLORREF,
+}
+impl MenuPalette {
+    fn from_mode(mode: usize) -> Self {
+        match mode {
+            2 => Self {
+                top: (46, 50, 58),
+                bottom: (34, 36, 41),
+                foreground: COLORREF(0x00f4f1ed),
+                hover: COLORREF(0x00413935),
+                separator: COLORREF(0x00504840),
+                accent: COLORREF(0x00ffa772),
+            },
+            1 => Self {
+                top: (246, 228, 215),
+                bottom: (220, 231, 244),
+                foreground: COLORREF(0x003d3836),
+                hover: COLORREF(0x00e5ddd8),
+                separator: COLORREF(0x00cfc5bd),
+                accent: COLORREF(0x00f7833a),
+            },
+            _ => Self {
+                top: (255, 255, 255),
+                bottom: (226, 238, 252),
+                foreground: COLORREF(0x0038271b),
+                hover: COLORREF(0x00f9e9d9),
+                separator: COLORREF(0x00eddfd2),
+                accent: COLORREF(0x00f7833a),
+            },
+        }
+    }
+}
+unsafe fn background(dc: HDC, rect: RECT, mode: usize) {
+    let palette = MenuPalette::from_mode(mode);
+    let colors = [palette.top, palette.bottom];
     let vertices = [
         TRIVERTEX {
             x: rect.left,
@@ -751,9 +814,10 @@ unsafe fn paint_menu(window: HWND, state: &State, position: (i32, i32), size: (i
     )
 }
 unsafe fn draw_menu(dc: HDC, state: &State) {
-    let dark = state.checks.dark.load(Ordering::Relaxed);
-    let fg = COLORREF(if dark { 0x00f4f1ed } else { 0x00463224 });
-    let accent = COLORREF(if dark { 0x00ffbb77 } else { 0x00e77928 });
+    let mode = state.checks.palette.load(Ordering::Relaxed);
+    let palette = MenuPalette::from_mode(mode);
+    let fg = palette.foreground;
+    let accent = palette.accent;
     let p = |v: f64| domain::dip_to_px(v, state.dpi);
     let rect = |x: f64, y: f64, w: f64, h: f64| RECT {
         left: p(x),
@@ -763,39 +827,40 @@ unsafe fn draw_menu(dc: HDC, state: &State) {
     };
     let root = if state.left_submenu { 184.0 } else { 0.0 };
     let child = if state.left_submenu { 0.0 } else { 184.0 };
-    background(dc, rect(root, 0.0, 180.0, 118.0), dark);
+    background(dc, rect(root, 0.0, 180.0, 108.0), mode);
     if state.settings {
-        background(dc, rect(child, 34.0, 180.0, 82.0), dark);
+        background(dc, rect(child, 0.0, 180.0, 108.0), mode);
     }
     let mut rows = vec![
         (
             0,
-            rect(root + 8.0, 8.0, 164.0, 32.0),
+            rect(root + 8.0, 8.0, 164.0, 28.0),
             "置顶模式",
             Some(state.checks.topmost.load(Ordering::Relaxed)),
         ),
-        (1, rect(root + 8.0, 42.0, 164.0, 32.0), "设置", None),
-        (2, rect(root + 8.0, 80.0, 164.0, 32.0), "退出", None),
+        (1, rect(root + 8.0, 38.0, 164.0, 28.0), "设置", None),
+        (2, rect(root + 8.0, 74.0, 164.0, 28.0), "退出", None),
     ];
     if state.settings {
         rows.extend([
             (
                 3,
-                rect(child + 8.0, 42.0, 164.0, 32.0),
+                rect(child + 8.0, 8.0, 164.0, 28.0),
                 "开机启动",
                 Some(state.checks.startup.load(Ordering::Relaxed)),
             ),
             (
                 4,
-                rect(child + 8.0, 76.0, 164.0, 32.0),
+                rect(child + 8.0, 38.0, 164.0, 28.0),
                 "系统通知",
                 Some(state.checks.notifications.load(Ordering::Relaxed)),
             ),
+            (5, rect(child + 8.0, 68.0, 164.0, 28.0), "检查更新", None),
         ]);
     }
     for (index, row, label, checked) in rows {
         if state.hover == index || (index == 1 && state.settings) {
-            let brush = CreateSolidBrush(COLORREF(if dark { 0x00443c35 } else { 0x00f9e9d9 }));
+            let brush = CreateSolidBrush(palette.hover);
             let old_brush = SelectObject(dc, HGDIOBJ(brush.0));
             let old_pen = SelectObject(dc, GetStockObject(NULL_PEN));
             let _ = RoundRect(
@@ -818,21 +883,39 @@ unsafe fn draw_menu(dc: HDC, state: &State) {
         if checked == Some(true) {
             text(dc, "✓", label_rect, 16, accent, DT_RIGHT, state.dpi);
         }
+        if index == 5 && state.checks.update_available.load(Ordering::Relaxed) {
+            let brush = CreateSolidBrush(COLORREF(0x004a4aeb));
+            let old = SelectObject(dc, HGDIOBJ(brush.0));
+            let pen = SelectObject(dc, GetStockObject(NULL_PEN));
+            let font = text_font(13, state.dpi);
+            let old_font = SelectObject(dc, HGDIOBJ(font.0));
+            let mut extent = SIZE::default();
+            let label_utf16: Vec<u16> = label.encode_utf16().collect();
+            let _ = GetTextExtentPoint32W(dc, &label_utf16, &mut extent);
+            SelectObject(dc, old_font);
+            let _ = DeleteObject(HGDIOBJ(font.0));
+            let left = label_rect.left + extent.cx + p(4.0);
+            let top = row.top + p(11.5);
+            let _ = Ellipse(dc, left, top, left + p(5.0), top + p(5.0));
+            SelectObject(dc, pen);
+            SelectObject(dc, old);
+            let _ = DeleteObject(HGDIOBJ(brush.0));
+        }
         if index == 1 {
             text(dc, "›", label_rect, 16, fg, DT_RIGHT, state.dpi);
         }
     }
-    let separator = CreateSolidBrush(COLORREF(if dark { 0x00504840 } else { 0x00eddfd2 }));
-    FillRect(dc, &rect(root + 16.0, 76.0, 148.0, 1.0), separator);
+    let separator = CreateSolidBrush(palette.separator);
+    FillRect(dc, &rect(root + 16.0, 70.0, 148.0, 1.0), separator);
     let _ = DeleteObject(HGDIOBJ(separator.0));
 }
 fn menu_panes(dpi: u32, expanded: bool, left: bool) -> Vec<(f64, f64, f64, f64)> {
     let p = |v: f64| domain::dip_to_px(v, dpi) as f64;
     let root = if left { p(184.0) } else { 0.0 };
     let child = if left { 0.0 } else { p(184.0) };
-    let mut panes = vec![(root, 0.0, p(180.0), p(118.0))];
+    let mut panes = vec![(root, 0.0, p(180.0), p(108.0))];
     if expanded {
-        panes.push((child, p(34.0), p(180.0), p(116.0) - p(34.0)));
+        panes.push((child, 0.0, p(180.0), p(108.0)));
     }
     panes
 }
@@ -942,6 +1025,18 @@ unsafe fn render_layer(
 #[cfg(test)]
 mod tests {
     #[test]
+    fn menu_palette_distinguishes_glass_system_light_and_dark() {
+        assert_eq!(MenuPalette::from_mode(0).top, (255, 255, 255));
+        assert_eq!(MenuPalette::from_mode(1).top, (246, 228, 215));
+        assert_eq!(MenuPalette::from_mode(2).top, (46, 50, 58));
+    }
+    #[test]
+    fn compact_menu_and_third_settings_action_share_visible_hit_regions() {
+        assert!(!super::inside_layout(false, false, 20.0, 110.0));
+        assert_eq!(super::hit(true, 210.0, 90.0), 5);
+        assert_eq!(super::hit(false, 20.0, 70.0), -1);
+    }
+    #[test]
     fn notification_hint_fits_its_short_copy_and_has_even_line_box_padding() {
         for dpi in [96, 120, 144, 168, 192] {
             let ((w, h), rows) = unsafe { super::hint_layout(dpi) };
@@ -991,7 +1086,7 @@ mod tests {
                                 right: 225,
                                 bottom: 148,
                             },
-                            false,
+                            0,
                         );
                     }
                 ));
@@ -1055,16 +1150,18 @@ mod tests {
     }
     #[test]
     fn transparent_space_is_outside_but_the_menu_bridge_is_inside() {
-        assert!(!inside_layout(true, false, 204.0, 20.0));
-        assert!(!inside_layout(true, true, 20.0, 20.0));
+        assert!(!inside_layout(true, false, 204.0, 110.0));
+        assert!(!inside_layout(true, true, 20.0, 110.0));
         assert!(inside_layout(true, false, 182.0, 58.0));
         assert!(inside_layout(true, true, 182.0, 58.0));
     }
     #[test]
     fn submenu_mask_stops_at_the_painted_bottom_at_fractional_dpi() {
         for dpi in [96, 120, 144, 168, 192] {
+            let root = menu_panes(dpi, true, false)[0];
+            assert_eq!(root.3, domain::dip_to_px(108.0, dpi) as f64);
             let child = menu_panes(dpi, true, false)[1];
-            let bottom = domain::dip_to_px(116.0, dpi);
+            let bottom = domain::dip_to_px(108.0, dpi);
             assert_eq!(child.1 + child.3, bottom as f64);
             assert_eq!(
                 corner_alpha(child.0 as i32 + 40, bottom, child, 15.0 * dpi as f64 / 96.0),
@@ -1075,16 +1172,16 @@ mod tests {
     #[test]
     fn settings_expands_beside_the_main_menu_instead_of_replacing_it() {
         assert_eq!(hit(true, 20.0, 20.0), 0);
-        assert_eq!(hit(true, 204.0, 58.0), 3);
-        assert_eq!(hit(true, 204.0, 95.0), 4);
+        assert_eq!(hit(true, 204.0, 20.0), 3);
+        assert_eq!(hit(true, 204.0, 55.0), 4);
         assert_eq!(hit(true, 182.0, 58.0), -1);
     }
     #[test]
     fn submenu_geometry_and_menu_gaps_are_consistent() {
         assert_eq!(hit(false, 20.0, 55.0), 1);
-        assert_eq!(hit(false, 20.0, 77.0), -1);
+        assert_eq!(hit(false, 20.0, 70.0), -1);
         assert_eq!(hit(false, 204.0, 55.0), -1);
-        assert_eq!(hit(true, 204.0, 75.0), -1);
+        assert_eq!(hit(true, 204.0, 67.0), -1);
         assert!(!submenu_left((100, 100), 180, 4, (0, 0, 1000, 800)));
         assert!(submenu_left((800, 100), 180, 4, (0, 0, 1000, 800)));
     }
@@ -1097,6 +1194,21 @@ mod tests {
         assert_eq!(
             tray_position((10, 1258, 50, 50), (225, 148), (0, 0, 2560, 1380), 8),
             (10, 1102)
+        );
+    }
+    #[test]
+    fn tray_pointer_menu_is_close_to_click_and_flips_at_work_area_edges() {
+        assert_eq!(
+            pointer_position((2100, 1270), (225, 135), (0, 0, 2560, 1380), 2),
+            (2102, 1133)
+        );
+        assert_eq!(
+            pointer_position((2555, 1270), (225, 135), (0, 0, 2560, 1380), 2),
+            (2328, 1133)
+        );
+        assert_eq!(
+            pointer_position((-1918, 2), (225, 135), (-1920, 0, 0, 1080), 2),
+            (-1916, 4)
         );
     }
 }

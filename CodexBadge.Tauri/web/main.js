@@ -91,10 +91,10 @@ if (view === 'capsule') {
   capsule.addEventListener('lostpointercapture', () => invoke('stop_drag'));
 } else if (view === 'detail') {
   app.innerHTML = `<div class="card detail-card">
-    <div class="top"><span>5 小时 <small id="five-note"></small></span><strong id="five-percent"><span id="five-value">--</span><small id="five-unit" class="detail-unit">%</small></strong></div>
+    <div class="top"><span><span id="quota-label">5 小时</span> <small id="five-note"></small> <small id="plan-label" hidden></small></span><strong id="five-percent"><span id="five-value">--</span><small id="five-unit" class="detail-unit">%</small></strong></div>
     <div class="track"><div id="fill" class="fill"></div></div>
     <div id="five-reset" class="reset muted">暂时无法读取额度</div>
-    <div class="row weekly"><span>本周剩余</span><strong id="weekly-percent"><span id="week-value">--</span><small class="detail-unit">%</small></strong></div>
+    <div id="weekly-row" class="row weekly"><span>本周剩余</span><strong id="weekly-percent"><span id="week-value">--</span><small class="detail-unit">%</small></strong></div>
     <div class="row weekly-reset"><span id="weekly-reset" class="muted">重置时间未知</span><span id="credit-summary"><strong id="credit-count">重置机会未知</strong><span id="credit-suffix" hidden> 次重置机会</span> <button id="credit-button" type="button" hidden>查看</button></span></div>
     <div id="quota-hint" class="quota-hint" hidden></div>
     <div id="last-updated" class="last-updated muted" hidden></div>
@@ -137,19 +137,31 @@ async function renderState() {
     if (state.defaultCursor) app.querySelector('.capsule').style.cursor = 'default';
     document.getElementById('percent').textContent = state.capsule.replace(/%$/, '');
     document.getElementById('capsule-unit').hidden = !topmost || !/%$/.test(state.capsule);
+    app.querySelector('.capsule').dataset.band=state.progressBand || 'unknown';
     const hintLevel = ['notice', 'urgent'].includes(state.hintLevel) ? state.hintLevel : 'none';
     document.getElementById('hint-dot').dataset.level = hintLevel;
-    app.querySelector('.capsule').setAttribute('aria-label', [`剩余额度 ${state.capsule}`, ...(state.hintMessages || [])].join('，'));
+    app.querySelector('.capsule').setAttribute('aria-label', [`${state.quotaMode === 'weekly' ? '本周' : state.quotaMode === 'five-hour' ? '五小时' : ''}剩余额度 ${state.capsule}`, ...(state.hintMessages || [])].join('，'));
   } else if (view === 'detail') {
+    app.querySelector('.detail-card').dataset.constrained=String(!!state.detailConstrained);
     renderedCreditHint = state.creditHint || null;
     renderedDetailSession = state.detailSession || 0;
-    document.getElementById('five-value').textContent = percent(state.fiveHour);
-    document.getElementById('five-note').textContent = state.weeklyExhausted ? '（暂不可用）' : '';
-    document.getElementById('five-reset').textContent = state.weeklyExhausted
+    const weeklyOnly=state.quotaMode === 'weekly';
+    app.querySelector('.detail-card').dataset.mode=state.quotaMode;
+    const primary=weeklyOnly ? state.weekly : state.fiveHour;
+    const blocked=!weeklyOnly && state.weeklyExhausted;
+    document.getElementById('quota-label').textContent=weeklyOnly ? '本周剩余' : state.quotaMode === 'none' ? '额度' : '5 小时';
+    document.getElementById('weekly-row').hidden=weeklyOnly || state.weekly == null;
+    document.getElementById('weekly-reset').hidden=state.weekly == null;
+    document.getElementById('five-reset').hidden=weeklyOnly && state.freshness === 'fresh';
+    const plan=document.getElementById('plan-label'); plan.textContent=state.planLabel || ''; plan.hidden=!plan.textContent;
+    document.getElementById('five-value').textContent = percent(primary);
+    document.getElementById('five-unit').hidden=primary == null;
+    document.getElementById('five-note').textContent = blocked ? '（暂不可用）' : '';
+    document.getElementById('five-reset').textContent = blocked
       ? '本周额度已用完，5小时额度暂不可用'
       : state.freshness === 'unavailable' ? (state.quotaStatus || '暂时无法读取额度')
-      : `${state.fiveReset}${state.freshness === 'stale' ? ' · 数据待更新' : ''}`;
-    document.getElementById('five-reset').classList.toggle('warning', state.weeklyExhausted);
+      : `${weeklyOnly ? state.weekReset : state.fiveReset}${state.freshness === 'stale' ? ' · 数据待更新' : ''}`;
+    document.getElementById('five-reset').classList.toggle('warning', blocked);
     const hint = document.getElementById('quota-hint');
     hint.textContent = (state.hintMessages || []).join('\n');
     hint.hidden = !hint.textContent;
@@ -162,8 +174,10 @@ async function renderState() {
       updated.textContent = `上次成功更新 ${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
     }
     const fill = document.getElementById('fill');
-    fill.style.width = `${state.fiveHour ?? 0}%`;
-    fill.dataset.band = state.weeklyExhausted ? 'blocked' : state.progressBand;
+    fill.style.width = `${primary ?? 0}%`;
+    fill.parentElement && (fill.parentElement.hidden=primary == null);
+    fill.dataset.band = blocked ? 'blocked' : state.progressBand;
+    document.getElementById('weekly-percent').hidden=state.weekly == null;
     document.getElementById('week-value').textContent = percent(state.weekly);
     document.getElementById('weekly-reset').textContent = state.weekReset;
     document.getElementById('credit-count').textContent = state.creditCount == null ? '重置机会未知' : state.creditCount;

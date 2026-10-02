@@ -804,7 +804,7 @@ impl AnchorProbe {
         }
     }
 
-    pub fn read_cached(&mut self, owner: isize) -> Option<(i32, i32)> {
+    pub fn read_cached(&mut self, automation: &UIAutomation, owner: isize) -> Option<(i32, i32)> {
         if self.owner != owner {
             self.owner = owner;
             self.cached = None;
@@ -849,7 +849,35 @@ impl AnchorProbe {
                 column_rect.get_right() - column_rect.get_left(),
                 column_rect.get_bottom() - column_rect.get_top(),
             ));
-            return Some(profile_anchor_point(avatar_rect, dpi(owner)));
+            let update = ["有可用更新", "Update available", "Updates available"]
+                .iter()
+                .find_map(|name| {
+                    let condition = automation
+                        .create_property_condition(
+                            UIProperty::Name,
+                            (*name).into(),
+                            Some(PropertyConditionFlags::IgnoreCase),
+                        )
+                        .ok()?;
+                    column
+                        .find_all(TreeScope::Descendants, &condition)
+                        .ok()?
+                        .into_iter()
+                        .find_map(|element| {
+                            if element.is_offscreen().unwrap_or(true)
+                                || element.get_control_type().ok() != Some(ControlType::Button)
+                            {
+                                return None;
+                            }
+                            let rect = element.get_bounding_rectangle().ok()?;
+                            (rect.get_left() >= column_rect.get_left()
+                                && rect.get_right() <= column_rect.get_right()
+                                && rect.get_bottom() <= avatar_rect.get_top()
+                                && rect.get_top() >= column_rect.get_top())
+                            .then_some(rect)
+                        })
+                });
+            return Some(profile_anchor_with_update(avatar_rect, update, dpi(owner)));
         }
         let rect = self.cached.as_ref()?.get_bounding_rectangle().ok()?;
         let valid = is_sidebar_container(frame, scale, rect);
@@ -871,7 +899,7 @@ impl AnchorProbe {
             self.cached = sidebar;
             self.avatar = Some(avatar);
             self.column = Some(column);
-            return self.read_cached(owner);
+            return self.read_cached(automation, owner);
         }
         let (element, point) = voice_anchor(automation, owner)?;
         self.cached = Some(element);
@@ -888,6 +916,22 @@ fn profile_anchor_point(rect: uiautomation::types::Rect, dpi: u32) -> (i32, i32)
         (center - half_css).round() as i32 + crate::domain::dip_to_px(30.0, dpi) / 2,
         rect.get_top(),
     )
+}
+
+fn profile_anchor_with_update(
+    avatar: uiautomation::types::Rect,
+    update: Option<uiautomation::types::Rect>,
+    dpi: u32,
+) -> (i32, i32) {
+    let mut point = profile_anchor_point(avatar, dpi);
+    if let Some(update) = update {
+        let gap = (avatar.get_top() - update.get_bottom()).clamp(
+            crate::domain::dip_to_px(6.0, dpi),
+            crate::domain::dip_to_px(20.0, dpi),
+        );
+        point.1 = update.get_top() - gap + crate::domain::dip_to_px(12.0, dpi);
+    }
+    point
 }
 
 fn is_avatar_column(
@@ -1030,6 +1074,21 @@ fn voice_anchor(automation: &UIAutomation, owner: isize) -> Option<(UIElement, (
 mod tests {
     use super::*;
     #[test]
+    fn update_anchor_preserves_the_gap_above_update_at_supported_scales() {
+        use uiautomation::types::Rect;
+        for dpi in [96, 120, 144] {
+            let px = |v| crate::domain::dip_to_px(v, dpi);
+            let avatar = Rect::new(px(16.0), px(900.0), px(52.0), px(936.0));
+            let update = Rect::new(px(16.0), px(856.0), px(52.0), px(892.0));
+            let point = profile_anchor_with_update(avatar, Some(update), dpi);
+            assert_eq!(update.get_top() - (point.1 - px(12.0)), px(8.0));
+            assert_eq!(
+                profile_anchor_with_update(avatar, None, dpi),
+                profile_anchor_point(avatar, dpi)
+            );
+        }
+    }
+    #[test]
     fn odd_avatar_width_does_not_bias_the_badge_to_the_left_at_125_percent() {
         let point = profile_anchor_point(uiautomation::types::Rect::new(86, 1126, 131, 1171), 120);
         let frame = crate::domain::capsule_frame(
@@ -1106,7 +1165,7 @@ mod tests {
         let point = probe.discover(&automation, owner).expect("avatar anchor");
         assert!(probe.avatar.is_some(), "must select the profile avatar");
         assert!(probe.navigation.is_some());
-        assert_eq!(probe.read_cached(owner), Some(point));
+        assert_eq!(probe.read_cached(&automation, owner), Some(point));
         let rect = crate::domain::capsule_frame(
             &crate::domain::Settings::default(),
             Some(point),

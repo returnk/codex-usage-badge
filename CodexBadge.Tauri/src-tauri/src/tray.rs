@@ -22,6 +22,7 @@ pub enum TrayAction {
     Startup,
     Topmost,
     Notifications,
+    CheckUpdate,
     Exit,
 }
 
@@ -30,7 +31,8 @@ pub(crate) struct Checks {
     pub startup: AtomicBool,
     pub topmost: AtomicBool,
     pub notifications: AtomicBool,
-    pub dark: AtomicBool,
+    pub palette: AtomicUsize,
+    pub update_available: AtomicBool,
 }
 
 struct Client {
@@ -50,14 +52,25 @@ impl Drop for Client {
 #[derive(Clone)]
 pub struct TrayHandle(Arc<Client>);
 impl TrayHandle {
-    pub fn sync(&self, startup: bool, topmost: bool, notifications: bool, dark: bool) {
+    pub fn sync(
+        &self,
+        startup: bool,
+        topmost: bool,
+        notifications: bool,
+        palette: usize,
+        update_available: bool,
+    ) {
         self.0.checks.startup.store(startup, Ordering::Relaxed);
         self.0.checks.topmost.store(topmost, Ordering::Relaxed);
         self.0
             .checks
             .notifications
             .store(notifications, Ordering::Relaxed);
-        self.0.checks.dark.store(dark, Ordering::Relaxed);
+        self.0.checks.palette.store(palette, Ordering::Relaxed);
+        self.0
+            .checks
+            .update_available
+            .store(update_available, Ordering::Relaxed);
         unsafe {
             let _ = PostMessageW(
                 Some(HWND(self.0.hwnd as _)),
@@ -110,6 +123,7 @@ impl TrayHandle {
 }
 
 struct State {
+    checks: Arc<Checks>,
     pending: Arc<Mutex<Option<crate::popup::Open>>>,
     popup: isize,
     icon: HICON,
@@ -157,6 +171,7 @@ pub fn start(callback: impl Fn(TrayAction) + Send + Sync + 'static) -> Result<Tr
                     }
                 };
                 let mut state = Box::new(State {
+                    checks: thread_checks.clone(),
                     pending: thread_pending,
                     popup: 0,
                     icon,
@@ -342,6 +357,16 @@ unsafe extern "system" fn window_proc(
                 let pending = state.pending.lock().unwrap().take();
                 if let Some(open) = pending {
                     crate::popup::show(state.popup, open);
+                }
+                return LRESULT(0);
+            }
+            WM_SETTINGCHANGE | WM_THEMECHANGED => {
+                if state.checks.palette.load(Ordering::Relaxed) != 0 {
+                    state
+                        .checks
+                        .palette
+                        .store(crate::popup::system_palette(), Ordering::Relaxed);
+                    crate::popup::refresh(state.popup);
                 }
                 return LRESULT(0);
             }

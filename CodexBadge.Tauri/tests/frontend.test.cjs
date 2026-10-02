@@ -17,7 +17,7 @@ async function page(view, overrides = {}, transport) {
     return elements.get(id);
   };
   const state = { theme: 'glass', capsule: '38%', fiveHour: 38, weekly: 59, fiveReset: '将于 04:57 重置',
-    weekReset: '10月4日 01:10 重置', weeklyExhausted: false, freshness: 'fresh', progressBand: 'yellow',
+    weekReset: '10/4 01:10 重置', weeklyExhausted: false, freshness: 'fresh', progressBand: 'yellow',
     credits: [], creditCount: 2, creditOpen: false, topmost: false, menuRequestId: 7, ...overrides };
   const app = element('app');
   Object.defineProperty(app, 'innerHTML', { set(html) { for (const match of html.matchAll(/id="([^"]+)"/g)) element(match[1]); for(const match of html.matchAll(/id="([^"]+)"[^>]*>([^<]*)</g)) element(match[1]).textContent=match[2]; } });
@@ -295,4 +295,29 @@ test('only the global capsule shows a small percent unit', async () => {
 test('detail reset line keeps the time without the duplicate countdown', async () => {
   const p=await page('detail',{countdown:'约3小时19分钟后重置'});
   assert.equal(p.elements.get('five-reset').textContent,p.state.fiveReset);
+});
+
+test('weekly-only detail uses weekly header percentage track and standalone credits', async () => {
+  const p=await page('detail',{quotaMode:'weekly',fiveHour:null,weekly:69,progressBand:'green',planLabel:'PRO'});
+  assert.equal(p.elements.get('quota-label').textContent,'本周剩余');
+  assert.equal(p.elements.get('five-value').textContent,'69');
+  assert.equal(p.elements.get('fill').style.width,'69%');
+  assert.equal(p.elements.get('five-reset').hidden,true);
+  assert.equal(p.elements.get('weekly-reset').textContent,p.state.weekReset);
+  assert.equal(p.elements.get('weekly-row').hidden,true);
+  assert.equal(p.elements.get('weekly-reset').hidden,false);
+  assert.equal(p.elements.get('plan-label').textContent,'PRO');
+});
+
+test('unavailable weekly sample keeps mode without inventing a percentage and permits refresh', async () => {
+  const p=await page('detail',{quotaMode:'weekly',fiveHour:null,weekly:null,freshness:'unavailable',quotaStatus:'连接超时'});
+  assert.equal(p.elements.get('quota-label').textContent,'本周剩余');
+  assert.equal(p.elements.get('five-value').textContent,'--');
+  assert.equal(p.elements.get('five-unit').hidden,true);
+  assert.equal(p.elements.has('refresh-quota'),false);
+});
+
+test('quota detail has no refresh or update controls and cannot retain update results', async () => {
+ const p=await page('detail');
+ for(const id of ['refresh-quota','check-update','update-status','update-notes','update-release','quota-status']) assert.equal(p.elements.has(id),false,id);
 });

@@ -58,7 +58,7 @@ struct ResetCandidate {
     snapshot: Snapshot,
     key: ResetKey,
     original_reset: i64,
-    five_hour_before: f64,
+    five_hour_before: Option<f64>,
 }
 #[derive(Clone, Default)]
 pub struct ResetDetector {
@@ -68,12 +68,13 @@ pub struct ResetDetector {
 fn valid_snapshot(snapshot: &Snapshot) -> bool {
     let windows = [(&snapshot.five_hour, 300), (&snapshot.weekly, 10080)];
     windows.iter().all(|(window, minutes)| {
-        window.as_ref().is_some_and(|w| {
-            w.minutes == *minutes
-                && w.remaining.is_finite()
-                && (0.0..=100.0).contains(&w.remaining)
-                && w.resets_at.is_some_and(|at| at > snapshot.fetched_at)
-        })
+        (window.is_none() && *minutes == 300)
+            || window.as_ref().is_some_and(|w| {
+                w.minutes == *minutes
+                    && w.remaining.is_finite()
+                    && (0.0..=100.0).contains(&w.remaining)
+                    && w.resets_at.is_some_and(|at| at > snapshot.fetched_at)
+            })
     }) && snapshot.available_credits == Some(snapshot.credits.len() as u64)
         && snapshot.credits.iter().enumerate().all(|(index, card)| {
             !card.id.is_empty()
@@ -102,6 +103,7 @@ impl ResetDetector {
             return None;
         };
         if account != old_account
+            || before.five_hour.is_some() != snapshot.five_hour.is_some()
             || !(1..=180).contains(&snapshot.fetched_at.saturating_sub(before.fetched_at))
             || !valid_snapshot(&before)
             || !valid_snapshot(snapshot)
@@ -114,12 +116,14 @@ impl ResetDetector {
         if let Some(candidate) = self.candidate.take() {
             let target = candidate.snapshot.weekly.as_ref().unwrap();
             let card_reset = candidate.key.consumed_credit.is_some();
-            let five = snapshot.five_hour.as_ref().unwrap().remaining;
+            let five = snapshot.five_hour.as_ref().map(|w| w.remaining);
             let confirmed = candidate.original_reset > snapshot.fetched_at.saturating_add(120)
                 && current.resets_at == target.resets_at
                 && current.remaining >= target.remaining - 5.0
                 && same_inventory(&candidate.snapshot, snapshot)
-                && (!card_reset || candidate.five_hour_before >= 99.0 || five >= 94.0);
+                && (!card_reset
+                    || candidate.five_hour_before.is_none_or(|v| v >= 99.0)
+                    || five.is_some_and(|v| v >= 94.0));
             if confirmed {
                 let wait = if card_reset { 30 } else { 60 };
                 if snapshot
@@ -159,12 +163,15 @@ impl ResetDetector {
                     .all(|c| snapshot.credits.contains(c))
         });
         let gain = current.remaining - old.remaining;
-        let five_hour_before = before.five_hour.as_ref().unwrap().remaining;
+        let five_hour_before = before.five_hour.as_ref().map(|w| w.remaining);
         let eligible = if consumed_credit.is_some() {
             gain >= 5.0
                 && new_reset >= old_reset.saturating_add(120)
-                && (five_hour_before >= 99.0
-                    || snapshot.five_hour.as_ref().unwrap().remaining >= 99.0)
+                && (five_hour_before.is_none_or(|v| v >= 99.0)
+                    || snapshot
+                        .five_hour
+                        .as_ref()
+                        .is_some_and(|w| w.remaining >= 99.0))
         } else {
             gain >= 15.0 && same_inventory(&before, snapshot)
         };
@@ -187,6 +194,27 @@ impl ResetDetector {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn weekly_only_reset_confirms_but_window_disappearance_does_not() {
+        for consumed in [false, true] {
+            let mut detector = ResetDetector::default();
+            let mut before = sample(100, 20.0, 9000, true);
+            before.five_hour = None;
+            let mut after = sample(160, 100.0, 20000, !consumed);
+            after.five_hour = None;
+            let mut confirm = after.clone();
+            confirm.fetched_at = 220;
+            confirm.weekly.as_mut().unwrap().remaining = 98.0;
+            detector.observe(&before, Some(1));
+            assert!(detector.observe(&after, Some(1)).is_none());
+            assert!(detector.observe(&confirm, Some(1)).is_some());
+            let mut detector = ResetDetector::default();
+            before.five_hour = sample(100, 20.0, 9000, true).five_hour;
+            detector.observe(&before, Some(1));
+            detector.observe(&after, Some(1));
+            assert!(detector.observe(&confirm, Some(1)).is_none());
+        }
+    }
     use crate::domain::{QuotaWindow, ResetCredit};
     fn sample(at: i64, remaining: f64, reset: i64, card: bool) -> Snapshot {
         Snapshot {

@@ -1,6 +1,6 @@
 # 余量 · Codex Badge — Tauri development
 
-当前产品实现：**Tauri 2 + Rust + 系统 WebView2**。当前公开版本为 **v0.3.1**。下载与日常使用见[项目首页](../README.md)；本页面向开发者，记录构建、诊断与验证信息。
+当前产品实现：**Tauri 2 + Rust + 系统 WebView2**。当前公开版本为 **v0.3.2**。下载与日常使用见[项目首页](../README.md)；本页面向开发者，记录构建、诊断与验证信息。
 
 Tauri 2 + Rust + system WebView2 implementation for Windows 10/11 x64. This directory is independent of the WPF source in `src/CodexBadge`.
 
@@ -43,7 +43,7 @@ For a new failure, record the time, display scaling, Glass/System choice, whethe
 
 ## Desktop acceptance
 
-v0.3.1 was checked on the current 125% desktop: normal/global capsules, left/right submenus, the Explorer tray icon, hover hints, reset credits, closing and focus. Four additional renderer regressions include an actual Win32 atomic-frame/no-activation check. Other DPI settings have geometry and coverage checks only; full multi-monitor, upgrade, IME and long-running lifecycle acceptance remains open.
+v0.3.2 was checked on the current 125% desktop: normal/global capsules, left/right submenus, the Explorer tray icon, hover hints, reset credits, closing and focus. Four additional renderer regressions include an actual Win32 atomic-frame/no-activation check. Other DPI settings have geometry and coverage checks only; full multi-monitor, upgrade, IME and long-running lifecycle acceptance remains open.
 
 The app checks owner visibility when disabling topmost. Both modes double-click to reset their own position. Native menus now submit complete frames atomically and share smooth alpha edges. Continuous menu sampling found no root-card jumps, hidden frames or black frames; the reported transient black window was not directly reproduced. `--diagnose-no-hover-detail` and `--diagnose-default-cursor` remain opt-in diagnostics. Cold-wait checks do not prove real client exit/reopen resource release.
 

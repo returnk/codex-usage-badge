@@ -123,13 +123,7 @@ impl Default for Settings {
 }
 
 pub fn parse_quota(result: &Value, now: i64) -> Snapshot {
-    let by_id = result.get("rateLimitsByLimitId").and_then(Value::as_object);
-    let limits = by_id
-        .and_then(|all| {
-            all.get("codex")
-                .or_else(|| all.values().find(|v| v.is_object()))
-        })
-        .or_else(|| result.get("rateLimits"));
+    let limits = quota_limits(result);
     let mut five_hour = None;
     let mut weekly = None;
     for key in ["primary", "secondary"] {
@@ -142,7 +136,7 @@ pub fn parse_quota(result: &Value, now: i64) -> Snapshot {
         ) else {
             continue;
         };
-        if !used.is_finite() {
+        if !used.is_finite() || !(0.0..=100.0).contains(&used) {
             continue;
         }
         let window = QuotaWindow {
@@ -204,6 +198,46 @@ pub fn parse_quota(result: &Value, now: i64) -> Snapshot {
         }),
         fetched_at: now,
     }
+}
+
+pub fn quota_limits(result: &Value) -> Option<&Value> {
+    match result.get("rateLimitsByLimitId").and_then(Value::as_object) {
+        Some(all) => all.get("codex").filter(|v| v.is_object()),
+        None => result.get("rateLimits").filter(|v| v.is_object()),
+    }
+}
+
+pub fn quota_response_valid(result: &Value) -> bool {
+    let Some(limits) = quota_limits(result) else {
+        return false;
+    };
+    ["primary", "secondary"].iter().all(|key| {
+        limits.get(key).filter(|v| !v.is_null()).is_none_or(|w| {
+            w.get("usedPercent")
+                .and_then(Value::as_f64)
+                .is_some_and(|v| v.is_finite() && (0.0..=100.0).contains(&v))
+                && w.get("windowDurationMins")
+                    .and_then(Value::as_u64)
+                    .is_some_and(|v| v > 0 && v <= u32::MAX as u64)
+        })
+    })
+}
+
+pub fn quota_mode(snapshot: Option<&Snapshot>) -> &'static str {
+    match snapshot {
+        Some(s) if s.five_hour.is_some() => "five-hour",
+        Some(s) if s.weekly.is_some() => "weekly",
+        _ => "none",
+    }
+}
+
+pub fn plan_label(account: &Value) -> Option<String> {
+    let plan = account.get("planType")?.as_str()?;
+    matches!(
+        plan,
+        "free" | "go" | "plus" | "pro" | "team" | "business" | "enterprise" | "edu"
+    )
+    .then(|| plan.to_ascii_uppercase())
 }
 
 pub fn credit_count(snapshot: Option<&Snapshot>, now: i64) -> Option<u64> {
@@ -318,7 +352,7 @@ pub fn menu_departure(
 pub fn capsule_text(remaining: Option<f64>) -> String {
     remaining
         .map(|percent| format!("{:.0}%", percent.round()))
-        .unwrap_or_else(|| "--%".into())
+        .unwrap_or_else(|| "--".into())
 }
 
 pub fn reset_position(settings: &mut Settings) {
@@ -703,13 +737,107 @@ pub fn format_five_hour_reset(epoch: Option<i64>) -> String {
 pub fn format_weekly_reset(epoch: Option<i64>) -> String {
     epoch
         .and_then(|value| Local.timestamp_opt(value, 0).single())
-        .map(|date| format!("{}日 {} 重置", date.format("%-m/%-d"), date.format("%H:%M")))
+        .map(|date| format!("{} {} 重置", date.format("%-m/%-d"), date.format("%H:%M")))
         .unwrap_or_else(|| "重置时间未知".into())
+}
+
+pub fn reset_display(epoch: Option<i64>, weekly: bool, now: i64) -> String {
+    let Some(at) = epoch else {
+        return "重置时间未知".into();
+    };
+    if at <= now {
+        return "已到重置时间，等待额度更新".into();
+    }
+    let Some(date) = Local.timestamp_opt(at, 0).single() else {
+        return "重置时间未知".into();
+    };
+    let today = Local.timestamp_opt(now, 0).single().map(|v| v.date_naive());
+    if weekly || today != Some(date.date_naive()) {
+        format_weekly_reset(Some(at))
+    } else {
+        format_five_hour_reset(Some(at))
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn adapted_detail_and_credit_fit_screen_edges_at_supported_scales() {
+        for dpi in [96, 120, 144] {
+            let p = |v| dip_to_px(v, dpi);
+            let area = (0, 0, p(1200.0), p(800.0));
+            for height in [131.0, 170.0, 220.0] {
+                for (x, y) in [(0, 0), (1100, 0), (0, 700), (1100, 700)] {
+                    let capsule = (p(x as f64), p(y as f64), p(30.0), p(30.0));
+                    let detail = place_detail_in_sidebar(
+                        capsule,
+                        (p(270.0), p(height)),
+                        area,
+                        &[capsule],
+                        p(9.0),
+                        None,
+                        None,
+                    )
+                    .unwrap();
+                    assert!(!rects_intersect(capsule, detail));
+                    assert!(
+                        detail.0 >= area.0
+                            && detail.1 >= area.1
+                            && detail.0 + detail.2 <= area.2
+                            && detail.1 + detail.3 <= area.3
+                    );
+                    if let Some(credit) = place_vertical_popup(
+                        detail,
+                        (p(205.0), p(38.0)),
+                        area,
+                        &[detail, capsule],
+                        p(6.0),
+                    ) {
+                        assert!(!rects_intersect(detail, credit));
+                        assert!(!rects_intersect(capsule, credit));
+                        assert!(
+                            credit.0 >= area.0
+                                && credit.1 >= area.1
+                                && credit.0 + credit.2 <= area.2
+                                && credit.1 + credit.3 <= area.3
+                        );
+                    }
+                }
+            }
+        }
+    }
+    #[test]
+    fn malformed_present_window_is_a_read_failure_and_past_reset_waits_for_update() {
+        for source in [
+            Value::Null,
+            serde_json::json!("broken"),
+            serde_json::json!([]),
+        ] {
+            assert!(!quota_response_valid(
+                &serde_json::json!({"rateLimitsByLimitId":{"codex":source}})
+            ));
+        }
+        let value = serde_json::json!({"rateLimits":{"primary":{"windowDurationMins":300},"secondary":{"usedPercent":31,"windowDurationMins":10080}}});
+        assert!(!quota_response_valid(&value));
+        assert_eq!(
+            reset_display(Some(99), false, 100),
+            "已到重置时间，等待额度更新"
+        );
+        assert_eq!(reset_display(None, true, 100), "重置时间未知");
+        let weekly = serde_json::json!({"rateLimits":{"primary":null,"secondary":{"usedPercent":31,"windowDurationMins":10080}}});
+        assert!(quota_response_valid(&weekly));
+        assert_eq!(quota_mode(Some(&parse_quota(&weekly, 100))), "weekly");
+    }
+    #[test]
+    fn invalid_percentage_and_unrelated_provider_do_not_manufacture_quota() {
+        for used in [-1.0, 101.0] {
+            let value = serde_json::json!({"rateLimits":{"primary":{"usedPercent":used,"windowDurationMins":300}}});
+            assert!(parse_quota(&value, 100).five_hour.is_none());
+        }
+        let value = serde_json::json!({"rateLimitsByLimitId":{"other":{"primary":{"usedPercent":10,"windowDurationMins":300}}}});
+        assert!(parse_quota(&value, 100).five_hour.is_none());
+    }
     #[test]
     fn avatar_capsule_is_centered_and_fits_the_navigation_column() {
         for dpi in [96, 120, 144, 192] {
@@ -1062,7 +1190,9 @@ mod tests {
     fn reset_time_has_local_date_and_minute() {
         assert!(format_five_hour_reset(Some(1_790_000_000)).starts_with("将于 "));
         assert!(format_five_hour_reset(Some(1_790_000_000)).contains(':'));
-        assert!(format_weekly_reset(Some(1_790_000_000)).contains('日'));
+        let text = format_weekly_reset(Some(1_790_000_000));
+        assert!(!text.contains('日'));
+        assert!(text.contains('/') && text.contains(':'));
         assert_eq!(format_weekly_reset(None), "重置时间未知");
     }
 

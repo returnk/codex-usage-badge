@@ -314,28 +314,55 @@ pub fn run(shared: Arc<Shared>, app: AppHandle) {
             {
                 break;
             }
+            if shared.quota_refresh.swap(false, Ordering::AcqRel) {
+                next_read = Instant::now();
+            }
             if Instant::now() >= next_read {
                 // Identify the account for every sample, so a switch never resembles a reset.
-                let account_key = server
-                    .request("account/read", json!({"refreshToken":false}))
-                    .ok()
-                    .and_then(|value| value.get("account").filter(|v| !v.is_null()).cloned())
-                    .map(|account| {
-                        use std::hash::{Hash, Hasher};
-                        let mut hasher = std::collections::hash_map::DefaultHasher::new();
-                        account.to_string().hash(&mut hasher);
-                        hasher.finish()
-                    });
+                let account = match server.request("account/read", json!({"refreshToken":false})) {
+                    Ok(value) => value.get("account").filter(|v| !v.is_null()).cloned(),
+                    Err(error) => {
+                        invalidate_account(&shared);
+                        fail(&shared, &app, &error);
+                        break;
+                    }
+                };
+                let Some(account) = account else {
+                    invalidate_account(&shared);
+                    fail(&shared, &app, "authentication unavailable");
+                    break;
+                };
+                let identity = account_identity(&account);
+                {
+                    let mut m = shared.inner.lock().unwrap();
+                    select_account(&mut m, identity);
+                    m.plan_label = domain::plan_label(&account);
+                }
+                let _ = app.emit("state-updated", ());
                 match server.request("account/rateLimits/read", json!({})) {
                     Ok(value) => {
+                        // Recheck identity after the quota request: never pair a new account's
+                        // limits with the account read before a switch.
+                        let checked = server.request("account/read", json!({"refreshToken":false}));
+                        let matched = checked
+                            .as_ref()
+                            .ok()
+                            .and_then(|v| v.get("account"))
+                            .filter(|v| !v.is_null())
+                            .is_some_and(|v| account_identity(v) == identity);
+                        if !matched {
+                            invalidate_account(&shared);
+                            fail(&shared, &app, "authentication changed during quota read");
+                            break;
+                        }
                         let snapshot = domain::parse_quota(&value, now());
-                        let account_key = celebration_account_key(account_key, &value);
+                        let account_key = celebration_account_key(Some(identity), &value);
                         diagnostics::record(format!(
                             "quota_snapshot generation={} snapshot_valid={}",
                             server.generation,
                             snapshot.five_hour.is_some() || snapshot.weekly.is_some()
                         ));
-                        if snapshot.five_hour.is_none() && snapshot.weekly.is_none() {
+                        if !domain::quota_response_valid(&value) {
                             fail(&shared, &app, "quota response incomplete");
                             break;
                         }
@@ -361,6 +388,7 @@ pub fn run(shared: Arc<Shared>, app: AppHandle) {
                                     diagnostics::record("celebration_event_save_failed");
                                 }
                             }
+                            m.quota_mode = domain::quota_mode(Some(&snapshot)).into();
                             m.snapshot = Some(snapshot);
                             m.quota_failed = false;
                             m.quota_status.clear();
@@ -402,6 +430,40 @@ pub fn run(shared: Arc<Shared>, app: AppHandle) {
         }
         backoff(&shared, &mut failures);
     }
+}
+
+fn account_identity(account: &Value) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    account.to_string().hash(&mut hasher);
+    hasher.finish()
+}
+
+fn select_account(m: &mut crate::Model, identity: u64) {
+    if m.quota_account != Some(identity) {
+        if m.quota_account.is_some() {
+            m.settings.reminder_state = Default::default();
+        }
+        m.snapshot = None;
+        m.quota_mode = "none".into();
+        m.plan_label = None;
+        m.account_key = None;
+        m.reset_detector.clear();
+        m.detail_credit_hint = None;
+        m.credit_open = false;
+        m.detail_content_height = None;
+    }
+    m.quota_account = Some(identity);
+}
+
+fn invalidate_account(shared: &Shared) {
+    let mut m = shared.inner.lock().unwrap();
+    m.snapshot = None;
+    m.plan_label = None;
+    m.account_key = None;
+    m.detail_credit_hint = None;
+    m.credit_open = false;
+    m.reset_detector.clear();
 }
 
 fn set_status(shared: &Shared, app: &AppHandle, status: &str) {
@@ -467,13 +529,84 @@ fn backoff(shared: &Shared, failures: &mut usize) {
     *failures += 1;
     let deadline = Instant::now() + Duration::from_secs(delay);
     while Instant::now() < deadline && shared.quota_active.load(Ordering::Acquire) {
+        if shared.quota_refresh.swap(false, Ordering::AcqRel) {
+            break;
+        }
         thread::sleep(Duration::from_millis(250));
     }
 }
 
 #[cfg(test)]
+pub(crate) fn live_readonly_sample() -> Result<(Option<String>, domain::Snapshot), String> {
+    let shared = Arc::new(Shared::default());
+    shared.quota_active.store(true, Ordering::Release);
+    let mut server = Server::start(shared)?;
+    let account = server.request("account/read", json!({"refreshToken":false}))?;
+    let response = server.request("account/rateLimits/read", json!({}))?;
+    let confirmed = server.request("account/read", json!({"refreshToken":false}))?;
+    if account.get("account") != confirmed.get("account")
+        || !domain::quota_response_valid(&response)
+    {
+        return Err("account changed or quota response incomplete".into());
+    }
+    Ok((
+        account.get("account").and_then(domain::plan_label),
+        domain::parse_quota(&response, now()),
+    ))
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn account_switch_discards_quota_and_unavailable_identity_keeps_last_mode_only() {
+        let shared = Shared::default();
+        let mut m = shared.inner.lock().unwrap();
+        select_account(&mut m, 1);
+        m.snapshot = Some(domain::parse_quota(
+            &json!({"rateLimits":{"primary":{"usedPercent":31,"windowDurationMins":10080}}}),
+            now(),
+        ));
+        m.quota_mode = "weekly".into();
+        m.plan_label = Some("PRO".into());
+        select_account(&mut m, 1);
+        assert!(m.snapshot.is_some());
+        drop(m);
+        invalidate_account(&shared);
+        let mut m = shared.inner.lock().unwrap();
+        assert!(m.snapshot.is_none());
+        assert_eq!(m.quota_mode, "weekly");
+        assert!(m.plan_label.is_none());
+        select_account(&mut m, 2);
+        assert_eq!(m.quota_mode, "none");
+        assert!(m.snapshot.is_none());
+    }
+
+    #[test]
+    #[ignore = "read-only live account acceptance; no settings or quotas modified"]
+    fn live_account_readonly() {
+        let shared = Arc::new(Shared::default());
+        shared.quota_active.store(true, Ordering::Release);
+        let mut server = Server::start(shared).expect("connect read-only app server");
+        let account = server
+            .request("account/read", json!({"refreshToken":false}))
+            .unwrap();
+        let response = server
+            .request("account/rateLimits/read", json!({}))
+            .unwrap();
+        assert!(domain::quota_response_valid(&response));
+        let snapshot = domain::parse_quota(&response, now());
+        println!(
+            "live_readonly plan={} mode={} five={} weekly={}",
+            account
+                .get("account")
+                .and_then(domain::plan_label)
+                .unwrap_or("unknown".into()),
+            domain::quota_mode(Some(&snapshot)),
+            snapshot.five_hour.is_some(),
+            snapshot.weekly.is_some()
+        );
+    }
     #[test]
     fn jsonl_response_filters_ids_and_notifications_and_reports_closed_timeout_paused() {
         let active = std::sync::atomic::AtomicBool::new(true);

@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Codex Badge",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "identifier": "app.codexbadge.tauri",
   "build": {
     "frontendDist": "../web"
@@ -72,6 +72,22 @@
         "skipTaskbar": true,
         "focusable": false,
         "focus": false
+      },
+      {
+        "label": "update",
+        "create": false,
+        "title": "Codex Badge Update",
+        "url": "update.html",
+        "width": 340,
+        "height": 300,
+        "visible": false,
+        "decorations": false,
+        "transparent": true,
+        "shadow": false,
+        "resizable": false,
+        "skipTaskbar": true,
+        "focusable": true,
+        "focus": false
       }
     ]
   },
@@ -86,7 +102,24 @@
     "windows": {
       "webviewInstallMode": {
         "type": "downloadBootstrapper"
-      }
+      },
+      "nsis": {
+        "template": "installer/installer.nsi"
+      },
+      "allowDowngrades": false
+    },
+    "createUpdaterArtifacts": true
+  },
+  "plugins": {
+    "updater": {
+      "endpoints": [
+        "https://github.com/returnk/codex-usage-badge/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      },
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEI5RTI5MzVFNDIyNjY2MjMKUldRalppWkNYcFBpdVNxNVkxOW5RMWdzMFBiRWhvY1p0YVc3RkJRYjJnL2YxRytXZWRXU2tUM0sK",
+      "requireSignedVersion": true
     }
   }
 }

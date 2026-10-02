@@ -1,5 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+#[cfg(test)]
+mod acceptance;
 mod celebration;
 mod celebration_window;
 mod diagnostics;
@@ -11,6 +13,8 @@ mod quota;
 mod reminders;
 mod settings;
 mod tray;
+mod update_window;
+mod updates;
 
 use domain::{Settings, Snapshot};
 use serde_json::{json, Value};
@@ -26,13 +30,19 @@ struct Shared {
     inner: Mutex<Model>,
     quota_active: AtomicBool,
     quota_generation: AtomicU64,
+    quota_refresh: AtomicBool,
 }
 
 struct Model {
     celebration_overlay: celebration_window::Overlay,
     reset_detector: celebration::ResetDetector,
     account_key: Option<u64>,
+    quota_account: Option<u64>,
+    plan_label: Option<String>,
+    quota_mode: String,
     detail_content_height: Option<f64>,
+    detail_constrained: bool,
+    last_missing_refresh: Option<Instant>,
     windows: [isize; 4],
     ready: [bool; 4],
     created_at: [Option<Instant>; 4],
@@ -93,7 +103,12 @@ impl Default for Model {
             celebration_overlay: Default::default(),
             reset_detector: Default::default(),
             account_key: None,
+            quota_account: None,
+            plan_label: None,
+            quota_mode: "none".into(),
             detail_content_height: None,
+            detail_constrained: false,
+            last_missing_refresh: None,
             windows: [0; 4],
             ready: [false; 4],
             created_at: [None; 4],
@@ -497,28 +512,26 @@ fn layout(m: &mut Model, app: &AppHandle) {
         m.detail_credit_hint.as_ref(),
     );
     let extra_height = hints.messages.len() as f64 * 28.0 + if fresh { 0.0 } else { 22.0 };
+    let requested_height = m
+        .detail_content_height
+        .unwrap_or(if detail_width < size(260.0) {
+            180.0 + extra_height
+        } else {
+            152.0 + extra_height
+        });
     let Some((detail_x, detail_y, detail_w, detail_h)) = domain::place_detail_in_sidebar(
         placement,
-        (
-            detail_width,
-            size(
-                m.detail_content_height
-                    .unwrap_or(if detail_width < size(260.0) {
-                        180.0 + extra_height
-                    } else {
-                        152.0 + extra_height
-                    }),
-            ),
-        ),
+        (detail_width, size(requested_height)),
         area,
         &avoid,
-        size(if m.settings.always_on_top { 6.0 } else { 9.0 }),
+        size(if m.settings.always_on_top { 6.0 } else { 8.0 }),
         m.sidebar.filter(|_| !m.settings.always_on_top),
         m.navigation.filter(|_| !m.settings.always_on_top),
     ) else {
         hide_flyouts(m);
         return;
     };
+    m.detail_constrained = detail_h + 1 < size(requested_height);
     let capsule_inside = native::cursor_in_rect(x, y, capsule_w, capsule_h);
     if m.last_capsule_hover != Some(capsule_inside) {
         diagnostics::record(format!("capsule_hover entered={capsule_inside}"));
@@ -542,6 +555,11 @@ fn layout(m: &mut Model, app: &AppHandle) {
             {
                 native::show(m.windows[1]);
                 m.detail_visible = true;
+                if request_missing_refresh(m, Instant::now()) {
+                    app.state::<Arc<Shared>>()
+                        .quota_refresh
+                        .store(true, Ordering::Release);
+                }
                 m.detail_session = m.detail_session.wrapping_add(1);
                 m.detail_credit_hint =
                     m.settings
@@ -1201,7 +1219,7 @@ fn probe_anchor(shared: Arc<Shared>) {
                 last_scan = Instant::now() - Duration::from_secs(60);
             }
             let sampled_frame = native::host_frame(owner);
-            let mut anchor = probe.read_cached(owner);
+            let mut anchor = probe.read_cached(&automation, owner);
             if anchor.is_none() && had_anchor {
                 recovery_until = Instant::now() + Duration::from_secs(2);
                 was_recovering = true;
@@ -1340,6 +1358,10 @@ fn finish_drag(m: &mut Model) -> Option<Settings> {
 #[tauri::command]
 fn get_state(state: State<'_, Arc<Shared>>) -> Value {
     let mut m = state.inner.lock().unwrap();
+    state_value(&mut m)
+}
+
+fn state_value(m: &mut Model) -> Value {
     let freshness = domain::quota_freshness(
         m.snapshot.as_ref().map(|s| s.fetched_at),
         m.quota_failed,
@@ -1388,20 +1410,23 @@ fn get_state(state: State<'_, Arc<Shared>>) -> Value {
         "hintMessages": hints.messages,
         "creditHint": m.detail_credit_hint,
         "detailSession": m.detail_session,
-        "countdown": reminders::countdown(five.and_then(|w| w.resets_at), epoch_now()),
+        "detailConstrained": m.detail_constrained,
+        "quotaMode": m.quota_mode,
+        "planLabel": m.plan_label,
+        "countdown": reminders::countdown(five.or(weekly).and_then(|w| w.resets_at), epoch_now()),
         "notificationsEnabled": m.settings.notifications_enabled,
         "updatedAt": reminders::updated_at(m.snapshot.as_ref().map(|s| s.fetched_at)),
         "theme": m.settings.theme,
         "capsule": domain::capsule_text(remaining),
         "fiveHour": five.map(|w| w.remaining),
         "weekly": weekly.map(|w| w.remaining),
-        "fiveReset": domain::format_five_hour_reset(five.and_then(|w| w.resets_at)),
-        "weekReset": domain::format_weekly_reset(weekly.and_then(|w| w.resets_at)),
+        "fiveReset": domain::reset_display(five.and_then(|w| w.resets_at), false, epoch_now()),
+        "weekReset": domain::reset_display(weekly.and_then(|w| w.resets_at), true, epoch_now()),
         "weeklyExhausted": weekly_exhausted,
-        "progressBand": domain::progress_band(five.map(|w| w.remaining).unwrap_or(0.0)),
+        "progressBand": remaining.map(domain::progress_band).unwrap_or("unknown"),
         "credits": credits.iter().map(|c| json!({"id":c.id,"expiresAt":c.expires_at})).collect::<Vec<_>>(),
         "creditCount": domain::credit_count(snapshot, epoch_now()),
-        "quotaStatus": m.quota_status,
+        "quotaStatus": if m.quota_status.is_empty() && five.is_none() && weekly.is_none() { "当前账号未返回可显示的额度窗口" } else { &m.quota_status },
         "creditOpen": m.credit_open,
         "startup": m.settings.start_with_windows,
         "topmost": m.settings.always_on_top,
@@ -1411,6 +1436,25 @@ fn get_state(state: State<'_, Arc<Shared>>) -> Value {
         "defaultCursor": diagnostics::default_cursor(),
         "menuRequestId": m.menu_request_id,
     })
+}
+
+fn request_missing_refresh(m: &mut Model, at: Instant) -> bool {
+    let available = domain::quota_freshness(
+        m.snapshot.as_ref().map(|s| s.fetched_at),
+        m.quota_failed,
+        epoch_now(),
+    ) != "unavailable"
+        && m.snapshot
+            .as_ref()
+            .is_some_and(|s| s.five_hour.is_some() || s.weekly.is_some());
+    if available
+        || m.last_missing_refresh
+            .is_some_and(|last| at.saturating_duration_since(last) < Duration::from_secs(30))
+    {
+        return false;
+    }
+    m.last_missing_refresh = Some(at);
+    true
 }
 
 #[tauri::command]
@@ -1458,7 +1502,7 @@ fn report_detail_height(
     state: State<'_, Arc<Shared>>,
     window: tauri::WebviewWindow,
 ) {
-    if window.label() == "detail" && height.is_finite() && (100.0..=600.0).contains(&height) {
+    if window.label() == "detail" && height.is_finite() && (80.0..=600.0).contains(&height) {
         let mut m = state.inner.lock().unwrap();
         m.detail_content_height = Some(height);
         if m.detail_session == detail_session
@@ -1628,17 +1672,18 @@ fn sync_tray(app: &AppHandle, settings: &Settings) {
             settings.start_with_windows,
             settings.always_on_top,
             settings.notifications_enabled,
-            popup_dark(settings),
+            popup_palette(settings),
+            update_window::notice(app),
         );
     }
 }
 
-fn popup_dark(settings: &Settings) -> bool {
-    settings.theme == domain::Theme::System
-        && winreg::RegKey::predef(winreg::enums::HKEY_CURRENT_USER)
-            .open_subkey("Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize")
-            .and_then(|key| key.get_value::<u32, _>("AppsUseLightTheme"))
-            .is_ok_and(|value| value == 0)
+fn popup_palette(settings: &Settings) -> usize {
+    if settings.theme == domain::Theme::Glass {
+        0
+    } else {
+        popup::system_palette()
+    }
 }
 
 #[tauri::command]
@@ -1896,6 +1941,7 @@ fn main() {
     let initial_settings = settings::load();
     diagnostics::init();
     tauri::Builder::default()
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(move |app| {
             let shared = Arc::new(Shared::default());
             {
@@ -1905,6 +1951,8 @@ fn main() {
                     diagnostics::record("celebration_settings_save_failed");
                 }
             }
+            app.manage(shared.clone());
+            app.manage(update_window::Controller::load());
             let handle = app.handle().clone();
             let tray_shared = shared.clone();
             let native_tray = tray::start(move |action| {
@@ -1920,6 +1968,11 @@ fn main() {
                     tray::TrayAction::Notifications => {
                         let _ = change_notifications(&shared, &callback_app);
                     }
+                    tray::TrayAction::CheckUpdate => {
+                        if let Err(error) = update_window::open(&callback_app) {
+                            diagnostics::record(format!("update_popover_open_failed {error}"));
+                        }
+                    }
                     tray::TrayAction::Exit => callback_app.exit(0),
                 });
             })
@@ -1930,11 +1983,12 @@ fn main() {
                     m.settings.start_with_windows,
                     m.settings.always_on_top,
                     m.settings.notifications_enabled,
-                    popup_dark(&m.settings),
+                    popup_palette(&m.settings),
+                    update_window::notice(app.handle()),
                 );
             }
             app.manage(native_tray);
-            app.manage(shared.clone());
+
             thread::spawn({
                 let s = shared.clone();
                 let handle = app.handle().clone();
@@ -1952,6 +2006,15 @@ fn main() {
             celebration_window::request_celebration,
             celebration_window::celebration_ready,
             get_state,
+            update_window::get_update_state,
+            update_window::update_ready,
+            update_window::close_update,
+            update_window::retry_update,
+            update_window::install_update,
+            update_window::drag_update,
+            update_window::move_update_drag,
+            update_window::end_update_drag,
+            updates::open_release,
             report_capsule_layout,
             set_input_regions,
             report_detail_height,
@@ -1987,6 +2050,58 @@ fn main() {
 #[cfg(test)]
 mod stability_tests {
     use super::*;
+    #[test]
+    fn readable_quota_hover_does_not_request_refresh() {
+        for minutes in [300, 10080] {
+            let mut m = Model::default();
+            m.quota_failed = false;
+            m.snapshot = Some(domain::parse_quota(
+                &json!({"rateLimits":{"primary":{"usedPercent":35,"windowDurationMins":minutes,"resetsAt":epoch_now()+3600}}}),
+                epoch_now(),
+            ));
+            assert!(!request_missing_refresh(&mut m, Instant::now()));
+            assert!(m.last_missing_refresh.is_none());
+        }
+    }
+    #[test]
+    fn missing_quota_hover_refresh_is_rate_limited_without_changing_status() {
+        let mut m = Model::default();
+        let at = Instant::now();
+        let status = m.quota_status.clone();
+        assert!(request_missing_refresh(&mut m, at));
+        assert!(!request_missing_refresh(
+            &mut m,
+            at + Duration::from_secs(29)
+        ));
+        assert!(request_missing_refresh(
+            &mut m,
+            at + Duration::from_secs(30)
+        ));
+        assert_eq!(m.quota_status, status);
+    }
+    #[test]
+    fn weekly_state_unifies_capsule_color_countdown_and_keeps_mode_when_stale() {
+        let mut m = Model::default();
+        m.quota_mode = "weekly".into();
+        m.snapshot = Some(domain::parse_quota(
+            &json!({"rateLimits":{"primary":{"usedPercent":31,"windowDurationMins":10080,"resetsAt":epoch_now()+86400}}}),
+            epoch_now(),
+        ));
+        let value = state_value(&mut m);
+        assert_eq!(value["capsule"], "69%");
+        assert_eq!(value["progressBand"], "green");
+        assert_eq!(value["fiveHour"], Value::Null);
+        assert!(!value["countdown"].is_null());
+        m.quota_failed = true;
+        let stale = state_value(&mut m);
+        assert_eq!(stale["quotaMode"], "weekly");
+        assert_eq!(stale["capsule"], "69%");
+        m.snapshot.as_mut().unwrap().fetched_at -= 1801;
+        let unavailable = state_value(&mut m);
+        assert_eq!(unavailable["quotaMode"], "weekly");
+        assert_eq!(unavailable["capsule"], "--");
+        assert_eq!(unavailable["weekly"], Value::Null);
+    }
     #[test]
     fn detail_view_requires_a_rendered_fresh_credit_and_one_second_of_visibility() {
         let at = Instant::now();
@@ -2215,15 +2330,25 @@ mod stability_tests {
         assert!(!removed.get());
     }
     #[test]
+    fn update_popover_can_subscribe_to_core_events() {
+        let capability: Value =
+            serde_json::from_str(include_str!("../capabilities/default.json")).unwrap();
+        assert!(capability["windows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|w| w == "update"));
+    }
+    #[test]
     fn popup_configs_never_request_initial_focus() {
         let config: tauri::Config =
             serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
-        assert_eq!(config.app.windows.len(), 4);
+        assert_eq!(config.app.windows.len(), 5);
         assert!(config
             .app
             .windows
             .iter()
-            .all(|w| !w.focus && !w.focusable && !w.visible && !w.create));
+            .all(|w| !w.focus && (!w.focusable || w.label == "update") && !w.visible && !w.create));
     }
     #[test]
     fn normal_backend_opens_capsule_menu_and_old_close_cannot_hide_new_request() {

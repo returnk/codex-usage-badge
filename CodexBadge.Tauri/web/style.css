@@ -108,3 +108,17 @@ button { cursor: pointer; font: inherit; }
 .menu-card button:hover, .menu-card button.native-hover { background: var(--menu-hover); }
 #startup-check, #topmost-check { width: 20px; flex: 0 0 20px; text-align: center; color: var(--link); font-size: 19px; font-weight: 600; }
 #startup-check[hidden], #topmost-check[hidden] { display: inline-block !important; visibility: hidden; }
+#plan-label { font-size:9px; opacity:.65; letter-spacing:.3px; margin-left:3px; }
+/* Preserve equal viewport gutters even when a constrained card scrolls. */
+.detail-card { scrollbar-width:thin; scrollbar-gutter:stable both-edges; padding-left:12px; padding-right:12px; }
+.capsule { color:var(--capsule-fg); }
+/* Content changes are measured first, then resized natively: no transient scrollbar. */
+.detail-card { overflow:hidden; }
+.detail-card[data-constrained="true"] { overflow-y:auto; }
+.reset { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.detail-card[data-mode="weekly"] {padding:16px;}
+.detail-card[data-mode="weekly"] .top {height:27px;font-size:13.5px;}
+.detail-card[data-mode="weekly"] .track {margin-top:7px;}
+.detail-card[data-mode="weekly"] .weekly-reset {margin-top:12px;font-size:11.5px;line-height:18px;flex-wrap:nowrap;gap:8px;}
+.detail-card[data-mode="weekly"] #weekly-reset {min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.detail-card[data-mode="weekly"] #credit-summary {margin-left:auto;flex-shrink:0;white-space:nowrap;}

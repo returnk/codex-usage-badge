@@ -1,6 +1,6 @@
 [package]
 name = "codex-badge-tauri"
-version = "0.3.1"
+version = "0.3.2"
 edition = "2021"
 
 [build-dependencies]
@@ -15,6 +15,8 @@ chrono = { version = "0.4", default-features = false, features = ["clock"] }
 winreg = "0.55"
 windows = { version = "0.61", features = [
   "Win32_Foundation",
+  "Win32_Networking_WinHttp",
+  "Win32_Networking_WinHttp",
   "Win32_Graphics_Dwm",
   "Win32_Graphics_Gdi",
   "Win32_System_Threading",
@@ -22,10 +24,12 @@ windows = { version = "0.61", features = [
   "Win32_System_JobObjects",
   "Win32_Security",
   "Win32_UI_HiDpi",
+  "Win32_UI_Controls",
   "Win32_UI_Input_KeyboardAndMouse",
   "Win32_UI_Shell",
   "Win32_UI_WindowsAndMessaging"
 ] }
+tauri-plugin-updater = "2"
 
 [profile.release]
 opt-level = "s"
@@ -33,3 +37,7 @@ lto = true
 codegen-units = 1
 strip = true
 panic = "abort"
+
+[dev-dependencies]
+base64 = "0.22"
+minisign-verify = "0.2"

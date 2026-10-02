@@ -1,0 +1,8 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="style.css"><link rel="stylesheet" href="update.css"><title>Codex Badge 更新</title></head>
+<body class="view-update"><main class="card update-card" aria-label="检查更新">
+<header id="update-drag"><strong id="update-title" aria-live="polite">正在检查更新…</strong><button id="close-update" class="update-close" aria-label="关闭">×</button></header>
+<div class="update-versions"><div><span class="muted">当前版本</span><span id="current-version">—</span></div><div><span class="muted">最新版本</span><span id="latest-version">—</span></div></div>
+<section class="update-summary"><strong id="notes-title">更新说明</strong><ul id="update-notes" aria-live="polite"></ul><p id="download-status" class="muted" aria-live="polite" hidden></p></section>
+<footer><button id="release-button" class="update-link" disabled>查看发布页</button><button id="install-button" class="update-primary" disabled>正在检查…</button></footer>
+</main><script src="update.js"></script></body></html>
