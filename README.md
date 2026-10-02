@@ -32,7 +32,7 @@
 
 | 安装版 · 推荐 | 便携版 |
 | --- | --- |
-| [下载安装器](https://github.com/returnk/codex-usage-badge/releases/download/v0.3.2/Codex%20Badge_0.3.2_x64-setup.exe) | [下载 ZIP](https://github.com/returnk/codex-usage-badge/releases/download/v0.3.2/CodexBadge-v0.3.2-windows-x64-portable.zip) |
+| [下载安装器](https://github.com/returnk/codex-usage-badge/releases/download/v0.3.2/Codex.Badge_0.3.2_x64-setup.exe) | [下载 ZIP](https://github.com/returnk/codex-usage-badge/releases/download/v0.3.2/CodexBadge-v0.3.2-windows-x64-portable.zip) |
 | 按提示安装后运行 | 解压后运行 `codex-badge-tauri.exe` |
 
 [更新说明](https://github.com/returnk/codex-usage-badge/releases/tag/v0.3.2) · [SHA-256 校验](https://github.com/returnk/codex-usage-badge/releases/download/v0.3.2/SHA256SUMS.txt)

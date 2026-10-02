@@ -18,7 +18,7 @@ Keep your remaining quota in view without leaving your work. The badge sits alon
 
 **v0.3.2** · Windows 10 / 11 x64 · Release
 
-[**Installer (recommended)**](https://github.com/returnk/codex-usage-badge/releases/download/v0.3.2/Codex%20Badge_0.3.2_x64-setup.exe) · [Portable ZIP](https://github.com/returnk/codex-usage-badge/releases/download/v0.3.2/CodexBadge-v0.3.2-windows-x64-portable.zip) · [Release notes](https://github.com/returnk/codex-usage-badge/releases/tag/v0.3.2) · [SHA-256](https://github.com/returnk/codex-usage-badge/releases/download/v0.3.2/SHA256SUMS.txt)
+[**Installer (recommended)**](https://github.com/returnk/codex-usage-badge/releases/download/v0.3.2/Codex.Badge_0.3.2_x64-setup.exe) · [Portable ZIP](https://github.com/returnk/codex-usage-badge/releases/download/v0.3.2/CodexBadge-v0.3.2-windows-x64-portable.zip) · [Release notes](https://github.com/returnk/codex-usage-badge/releases/tag/v0.3.2) · [SHA-256](https://github.com/returnk/codex-usage-badge/releases/download/v0.3.2/SHA256SUMS.txt)
 
 Requires WebView2 Runtime, the signed-in Codex Windows desktop app, and a working Codex CLI. The installer can download WebView2 if needed. No .NET runtime required. The app is unsigned; Windows may show a security warning. Download only from this repository.
 
