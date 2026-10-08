@@ -49,4 +49,7 @@ jobs:
       - name: Install locked build dependencies
         run: npm ci
       - name: Build Windows NSIS package
-        run: npm run build -- -- --locked
+        run: |
+          # CI checks packaging without the local release-signing private key.
+          '{"bundle":{"createUpdaterArtifacts":false}}' | Set-Content -Encoding utf8NoBOM "$env:RUNNER_TEMP/tauri-ci.json"
+          npm run build -- --config "$env:RUNNER_TEMP/tauri-ci.json" -- --locked
