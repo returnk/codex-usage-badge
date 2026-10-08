@@ -1,6 +1,6 @@
 # 余量 · Codex Badge — Tauri development
 
-当前产品实现：**Tauri 2 + Rust + 系统 WebView2**。当前公开版本为 **v0.3.2**。下载与日常使用见[项目首页](../README.md)；本页面向开发者，记录构建、诊断与验证信息。
+当前产品实现：**Tauri 2 + Rust + 系统 WebView2**。当前公开版本为 **v0.3.3**。下载与日常使用见[项目首页](../README.md)；本页面向开发者，记录构建、诊断与验证信息。
 
 Tauri 2 + Rust + system WebView2 implementation for Windows 10/11 x64. This directory is independent of the WPF source in `src/CodexBadge`.
 
@@ -40,6 +40,10 @@ Dragging skips unchanged positions and pauses UIA probing; the native region upd
 After a missing tray menu or a failed topmost switch, note the approximate clock time and inspect the nearby `tray_right`, `menu_request`, `menu_raise`, `menu_observe`, and `topmost_*` entries. A tray menu is temporarily topmost and unowned so it is visible above the foreground app; its checkmark comes from persisted state. The menu now gives the pointer time to travel from the tray icon into the popup; after entering, it closes about 300 ms after leaving.
 
 For a new failure, record the time, display scaling, Glass/System choice, whether topmost is enabled, and the shortest steps to reproduce. The nearby log entries identify quota RPC stages, native mode requests, menu visibility and drag coordinates. Historic quota failures cannot be assigned a cause when their original errors were discarded.
+
+## v0.3.3 recovery events
+
+Recent valid quota evidence is saved per account for up to seven days. Pending early-recovery effects expire after 24 hours; a renderer-start acknowledgement is saved before consuming an event. Natural scheduled resets and first readings without history do not celebrate. The new history cannot reconstruct quota readings from older releases. Recovery records contain local opaque account fingerprints, quota/window values and reset-credit evidence; no credentials or account plaintext are stored there.
 
 ## Desktop acceptance
 

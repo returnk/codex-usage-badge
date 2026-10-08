@@ -8,6 +8,15 @@ pub struct Overlay {
     hwnd: isize,
     generation: u64,
     pending_session: Option<u64>,
+    playing: Option<Playing>,
+}
+
+struct Playing {
+    id: u64,
+    event: crate::celebration::Playback,
+    account: Option<u64>,
+    session: u64,
+    acknowledged: bool,
 }
 
 fn initialize_native(window: &WebviewWindow, children: bool) -> Result<(), String> {
@@ -41,6 +50,7 @@ pub fn hide(overlay: &mut Overlay) {
     native::hide(overlay.hwnd);
     overlay.generation = overlay.generation.wrapping_add(1);
     overlay.pending_session = None;
+    overlay.playing = None;
 }
 
 fn fresh(m: &crate::Model) -> bool {
@@ -85,12 +95,19 @@ pub async fn request_celebration(
         if !m.detail_visible || m.detail_session != detail_session || !m.ready[1] {
             return Ok(None);
         }
-        if m.settings.celebration_state.welcome_done
-            && (!fresh(&m) || m.settings.celebration_state.pending_reset.is_none())
-        {
+        let Some(event) = m
+            .settings
+            .celebration_state
+            .peek(m.account_key, epoch_now())
+        else {
+            return Ok(None);
+        };
+        if event.kind == "reset" && !fresh(&m) {
             return Ok(None);
         }
-        if m.celebration_overlay.pending_session.is_some() {
+        if m.celebration_overlay.pending_session.is_some()
+            || m.celebration_overlay.playing.is_some()
+        {
             return Ok(None);
         }
         m.celebration_overlay.pending_session = Some(detail_session);
@@ -153,12 +170,21 @@ pub async fn celebration_ready(
     if window.label() != "celebration" {
         return Ok(None);
     }
-    initialize_native(&window, true)?;
+    if let Err(error) = initialize_native(&window, true) {
+        hide(&mut state.inner.lock().unwrap().celebration_overlay);
+        diagnostics::record("celebration_play_failed reason=initialize");
+        return Err(error);
+    }
     let shared = Arc::clone(state.inner());
     let app = window.app_handle().clone();
     let (sender, receiver) = std::sync::mpsc::channel();
     app.run_on_main_thread(move || {
-        let _ = sender.send(show_ready(&shared, &window));
+        let result = show_ready(&shared, &window);
+        if result.is_err() {
+            hide(&mut shared.inner.lock().unwrap().celebration_overlay);
+            diagnostics::record("celebration_play_failed reason=initialize");
+        }
+        let _ = sender.send(result);
     })
     .map_err(|e| e.to_string())?;
     receiver
@@ -192,43 +218,127 @@ fn show_ready(shared: &Arc<Shared>, window: &WebviewWindow) -> Result<Option<Val
         monitor.area,
         monitor.dpi,
     );
+    native::move_only(hwnd, x, y);
     window
         .set_size(tauri::PhysicalSize::new(w as u32, h as u32))
         .map_err(|e| e.to_string())?;
-    window
-        .set_position(tauri::PhysicalPosition::new(x, y))
-        .map_err(|e| e.to_string())?;
     native::bind_owner(hwnd, m.windows[1]);
     native::set_topmost(hwnd, m.settings.always_on_top);
-    let before = m.settings.celebration_state.clone();
     let account = m.account_key;
-    let Some(kind) = m.settings.celebration_state.take(account, epoch_now()) else {
-        settings::save(&m.settings)?;
+    let Some(event) = m.settings.celebration_state.peek(account, epoch_now()) else {
         hide(&mut m.celebration_overlay);
         return Ok(None);
     };
-    if let Err(error) = settings::save(&m.settings) {
-        m.settings.celebration_state = before;
-        hide(&mut m.celebration_overlay);
-        return Err(error);
-    }
     m.celebration_overlay.pending_session = None;
     m.celebration_overlay.generation = m.celebration_overlay.generation.wrapping_add(1);
     let generation = m.celebration_overlay.generation;
+    let kind = event.kind;
+    m.celebration_overlay.playing = Some(Playing {
+        id: generation,
+        event,
+        account,
+        session,
+        acknowledged: false,
+    });
     native::show(hwnd);
     let shared = Arc::clone(shared);
     let app = window.app_handle().clone();
     thread::spawn(move || {
         thread::sleep(Duration::from_millis(2800));
+        let emitter = app.clone();
         let _ = app.run_on_main_thread(move || {
             let mut m = shared.inner.lock().unwrap();
             if m.celebration_overlay.generation == generation {
+                if m.celebration_overlay
+                    .playing
+                    .as_ref()
+                    .is_some_and(|p| !p.acknowledged)
+                {
+                    diagnostics::record("celebration_play_failed reason=timeout");
+                }
+                let acknowledged = m
+                    .celebration_overlay
+                    .playing
+                    .as_ref()
+                    .is_some_and(|p| p.acknowledged);
                 hide(&mut m.celebration_overlay);
+                drop(m);
+                if acknowledged {
+                    let _ = emitter.emit("state-updated", ());
+                }
             }
         });
     });
-    diagnostics::record("celebration_play");
-    Ok(Some(json!({"kind":kind,"origin":{"x":ox,"y":oy}})))
+    Ok(Some(
+        json!({"kind":kind,"playId":generation,"origin":{"x":ox,"y":oy}}),
+    ))
+}
+
+#[tauri::command]
+pub fn celebration_started(
+    play_id: u64,
+    state: State<'_, Arc<Shared>>,
+    window: WebviewWindow,
+) -> Result<bool, String> {
+    if window.label() != "celebration" {
+        return Ok(false);
+    }
+    let mut m = state.inner.lock().unwrap();
+    let Some(playing) = m
+        .celebration_overlay
+        .playing
+        .as_ref()
+        .filter(|p| p.id == play_id && !p.acknowledged)
+    else {
+        return Ok(false);
+    };
+    if !m.detail_visible
+        || m.detail_session != playing.session
+        || m.account_key != playing.account
+        || !native::is_visible(m.celebration_overlay.hwnd)
+    {
+        return Ok(false);
+    }
+    let id = playing.event.id.clone();
+    let account = playing.account;
+    let mut saved = m.settings.clone();
+    let acknowledged =
+        m.settings
+            .celebration_state
+            .acknowledge(&id, account, epoch_now(), |next| {
+                saved.celebration_state = next.clone();
+                settings::save(&saved)
+            });
+    match acknowledged {
+        Ok(true) => {
+            if let Some(playing) = m.celebration_overlay.playing.as_mut() {
+                playing.acknowledged = true;
+            }
+            diagnostics::record("celebration_play");
+            Ok(true)
+        }
+        result => {
+            hide(&mut m.celebration_overlay);
+            diagnostics::record("celebration_play_failed reason=save");
+            result
+        }
+    }
+}
+
+#[tauri::command]
+pub fn celebration_failed(play_id: u64, state: State<'_, Arc<Shared>>, window: WebviewWindow) {
+    if window.label() != "celebration" {
+        return;
+    }
+    let mut m = state.inner.lock().unwrap();
+    if m.celebration_overlay
+        .playing
+        .as_ref()
+        .is_some_and(|p| p.id == play_id && !p.acknowledged)
+    {
+        hide(&mut m.celebration_overlay);
+        diagnostics::record("celebration_play_failed reason=renderer");
+    }
 }
 
 #[cfg(test)]

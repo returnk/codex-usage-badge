@@ -780,16 +780,70 @@ fn is_sidebar_container(frame: RECT, scale: f64, rect: uiautomation::types::Rect
         && bottom <= frame.bottom as f64 + 4.0 * scale
 }
 
+#[derive(Clone, Copy)]
+struct AvatarAnchorSnapshot {
+    frame: RECT,
+    avatar: uiautomation::types::Rect,
+    point: (i32, i32),
+    dpi: u32,
+}
+
+impl AvatarAnchorSnapshot {
+    fn during_empty_column(
+        self,
+        frame: RECT,
+        avatar: uiautomation::types::Rect,
+        column: uiautomation::types::Rect,
+        offscreen: bool,
+    ) -> Option<(i32, i32)> {
+        let bounds = |rect: uiautomation::types::Rect| {
+            (
+                rect.get_left(),
+                rect.get_top(),
+                rect.get_right(),
+                rect.get_bottom(),
+            )
+        };
+        (!offscreen
+            && bounds(column) == (0, 0, 0, 0)
+            && bounds(avatar) == bounds(self.avatar)
+            && (frame.left, frame.top, frame.right, frame.bottom)
+                == (
+                    self.frame.left,
+                    self.frame.top,
+                    self.frame.right,
+                    self.frame.bottom,
+                ))
+            .then_some(self.point)
+    }
+}
+
 pub struct AnchorProbe {
     cached: Option<UIElement>,
     owner: isize,
     avatar: Option<UIElement>,
     column: Option<UIElement>,
+    last_avatar_anchor: Option<AvatarAnchorSnapshot>,
     pub navigation: Option<crate::domain::Rect>,
     pub sidebar: Option<crate::domain::Rect>,
 }
 
 impl AnchorProbe {
+    pub fn avatar_diameter(&self) -> Option<f64> {
+        let snapshot = self.last_avatar_anchor?;
+        let rect = snapshot.avatar;
+        // Profile hit bounds are 36 units; the visible circle is 24 units.
+        // Keep the actual host zoom, then add our transparent two-DIP inset.
+        let circle = ((rect.get_right() - rect.get_left()).min(rect.get_bottom() - rect.get_top())
+            as f64
+            * 2.0
+            / 3.0)
+            .round() as i32;
+        Some(crate::domain::px_to_dip(
+            circle + 2 * crate::domain::dip_to_px(2.0, snapshot.dpi),
+            snapshot.dpi,
+        ))
+    }
     pub fn has_avatar(&self) -> bool {
         self.avatar.is_some()
     }
@@ -799,6 +853,7 @@ impl AnchorProbe {
             owner: 0,
             avatar: None,
             column: None,
+            last_avatar_anchor: None,
             navigation: None,
             sidebar: None,
         }
@@ -810,6 +865,7 @@ impl AnchorProbe {
             self.cached = None;
             self.avatar = None;
             self.column = None;
+            self.last_avatar_anchor = None;
             self.navigation = None;
             self.sidebar = None;
         }
@@ -831,14 +887,21 @@ impl AnchorProbe {
                 });
             let avatar_rect = avatar.get_bounding_rectangle().ok()?;
             let column_rect = column.get_bounding_rectangle().ok()?;
-            if avatar.is_offscreen().unwrap_or(true)
-                || !is_avatar_column(frame, scale, avatar_rect, column_rect)
-            {
+            let offscreen = avatar.is_offscreen().unwrap_or(true);
+            // Image viewing can zero the column bounds while the verified avatar
+            // and host bounds remain unchanged. Keep only that exact prior point.
+            if let Some(point) = self.last_avatar_anchor.and_then(|snapshot| {
+                snapshot.during_empty_column(frame, avatar_rect, column_rect, offscreen)
+            }) {
+                return Some(point);
+            }
+            if offscreen || !is_avatar_column(frame, scale, avatar_rect, column_rect) {
                 // The wide sidebar cache is geometry-only in avatar mode; do
                 // not turn it into the legacy avatar anchor after invalidation.
                 self.cached = None;
                 self.avatar = None;
                 self.column = None;
+                self.last_avatar_anchor = None;
                 self.navigation = None;
                 self.sidebar = None;
                 return None;
@@ -877,7 +940,14 @@ impl AnchorProbe {
                             .then_some(rect)
                         })
                 });
-            return Some(profile_anchor_with_update(avatar_rect, update, dpi(owner)));
+            let point = profile_anchor_with_update(avatar_rect, update, dpi(owner));
+            self.last_avatar_anchor = Some(AvatarAnchorSnapshot {
+                frame,
+                avatar: avatar_rect,
+                point,
+                dpi: dpi(owner),
+            });
+            return Some(point);
         }
         let rect = self.cached.as_ref()?.get_bounding_rectangle().ok()?;
         let valid = is_sidebar_container(frame, scale, rect);
@@ -893,6 +963,7 @@ impl AnchorProbe {
         self.cached = None;
         self.avatar = None;
         self.column = None;
+        self.last_avatar_anchor = None;
         self.navigation = None;
         self.sidebar = None;
         if let Some((avatar, column, sidebar)) = avatar_anchor(automation, owner) {
@@ -907,13 +978,9 @@ impl AnchorProbe {
     }
 }
 
-fn profile_anchor_point(rect: uiautomation::types::Rect, dpi: u32) -> (i32, i32) {
-    // Round the final HWND origin once, using the CSS frame's fractional physical width.
-    // capsule_frame subtracts half its integer width from this point.
-    let center = (rect.get_left() as f64 + rect.get_right() as f64) / 2.0;
-    let half_css = 15.0 * dpi.max(96) as f64 / 96.0;
+fn profile_anchor_point(rect: uiautomation::types::Rect, _dpi: u32) -> (i32, i32) {
     (
-        (center - half_css).round() as i32 + crate::domain::dip_to_px(30.0, dpi) / 2,
+        rect.get_left() + (rect.get_right() - rect.get_left()) / 2,
         rect.get_top(),
     )
 }
@@ -1074,6 +1141,35 @@ fn voice_anchor(automation: &UIAutomation, owner: isize) -> Option<(UIElement, (
 mod tests {
     use super::*;
     #[test]
+    fn avatar_circle_size_follows_host_zoom_without_using_the_whole_hit_target() {
+        for (dpi, hit_size, circle_size) in
+            [(96, 36, 24), (120, 45, 30), (144, 72, 48), (192, 72, 48)]
+        {
+            let avatar = uiautomation::types::Rect::new(100, 900, 100 + hit_size, 900 + hit_size);
+            let point = profile_anchor_point(avatar, dpi);
+            let mut probe = AnchorProbe::new();
+            probe.last_avatar_anchor = Some(AvatarAnchorSnapshot {
+                frame: RECT::default(),
+                avatar,
+                point,
+                dpi,
+            });
+            let diameter = probe.avatar_diameter().unwrap();
+            let rect = crate::domain::avatar_capsule_frame(
+                &crate::domain::Settings::default(),
+                Some(point),
+                dpi,
+                diameter,
+            )
+            .unwrap();
+            assert_eq!(rect.2 - 2 * crate::domain::dip_to_px(2.0, dpi), circle_size);
+            assert!(
+                (rect.0 as f64 + rect.2 as f64 / 2.0 - (100.0 + hit_size as f64 / 2.0)).abs()
+                    <= 1.0
+            );
+        }
+    }
+    #[test]
     fn update_anchor_preserves_the_gap_above_update_at_supported_scales() {
         use uiautomation::types::Rect;
         for dpi in [96, 120, 144] {
@@ -1098,8 +1194,7 @@ mod tests {
             None,
         )
         .unwrap();
-        // The WebView's 30 DIP frame is 37.5 physical pixels. UIA avatar center is 108.5.
-        let rendered_center = frame.0 as f64 + 18.75;
+        let rendered_center = frame.0 as f64 + frame.2 as f64 / 2.0;
         assert!((rendered_center - 108.5).abs() <= 0.5);
     }
 
@@ -1113,7 +1208,7 @@ mod tests {
             None,
         )
         .unwrap();
-        assert!((frame.0 as f64 + 26.25 - 117.5).abs() <= 0.5);
+        assert!((frame.0 as f64 + frame.2 as f64 / 2.0 - 117.5).abs() <= 0.5);
     }
     #[test]
     fn avatar_navigation_uses_real_column_and_rejects_chat_list_and_root() {
@@ -1136,6 +1231,66 @@ mod tests {
         ] {
             assert!(!is_avatar_column(frame, 1.25, avatar, rect));
         }
+    }
+
+    #[test]
+    fn empty_column_retains_only_the_same_verified_avatar_and_host() {
+        let frame = RECT {
+            left: 100,
+            top: 50,
+            right: 1700,
+            bottom: 1080,
+        };
+        let avatar = uiautomation::types::Rect::new(111, 1007, 156, 1052);
+        let empty = uiautomation::types::Rect::new(0, 0, 0, 0);
+        let snapshot = AvatarAnchorSnapshot {
+            frame,
+            avatar,
+            point: (134, 1007),
+            dpi: 120,
+        };
+        assert_eq!(
+            snapshot.during_empty_column(frame, avatar, empty, false),
+            Some(snapshot.point)
+        );
+        assert_eq!(
+            snapshot.during_empty_column(frame, avatar, empty, true),
+            None
+        );
+        assert_eq!(
+            snapshot.during_empty_column(RECT { left: 101, ..frame }, avatar, empty, false),
+            None
+        );
+        assert_eq!(
+            snapshot.during_empty_column(
+                RECT {
+                    bottom: 1081,
+                    ..frame
+                },
+                avatar,
+                empty,
+                false
+            ),
+            None
+        );
+        assert_eq!(
+            snapshot.during_empty_column(
+                frame,
+                uiautomation::types::Rect::new(112, 1007, 157, 1052),
+                empty,
+                false
+            ),
+            None
+        );
+        assert_eq!(
+            snapshot.during_empty_column(
+                frame,
+                avatar,
+                uiautomation::types::Rect::new(100, 50, 165, 1080),
+                false
+            ),
+            None
+        );
     }
 
     #[test]
@@ -1166,11 +1321,11 @@ mod tests {
         assert!(probe.avatar.is_some(), "must select the profile avatar");
         assert!(probe.navigation.is_some());
         assert_eq!(probe.read_cached(&automation, owner), Some(point));
-        let rect = crate::domain::capsule_frame(
+        let rect = crate::domain::avatar_capsule_frame(
             &crate::domain::Settings::default(),
             Some(point),
             dpi(owner),
-            None,
+            probe.avatar_diameter().expect("verified avatar size"),
         )
         .unwrap();
         println!(

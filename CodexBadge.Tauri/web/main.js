@@ -11,7 +11,6 @@ let readyReported = false;
 let readyQueued = false;
 let renderedCreditHint = null;
 let renderedDetailSession = 0;
-let celebrationSession = -1;
 function sendReady() {
   if (readyReported || readyQueued) return;
   readyQueued = true;
@@ -25,6 +24,10 @@ function sendReady() {
   });
 }
 let layoutQueued = false;
+let scaleSync = null;
+function syncScale() {
+  return scaleSync ||= invoke('sync_webview_scale', {pixelRatio:devicePixelRatio}).finally(() => { scaleSync=null; });
+}
 function settled(callback) { requestAnimationFrame(() => requestAnimationFrame(callback)); }
 function reportLayout() {
   if (view !== 'capsule' || layoutQueued) return;
@@ -38,7 +41,7 @@ function reportLayout() {
   });
 }
 function reportContent() {
-  settled(() => {
+  syncScale().then(() => settled(() => {
     const buttons = [...document.querySelectorAll('button')].filter(button => !button.hidden).map(button => {
       const r=button.getBoundingClientRect(); return [r.x,r.y,r.width,r.height];
     });
@@ -50,15 +53,20 @@ function reportContent() {
       const bottom=Math.max(...visible.map(item=>item.getBoundingClientRect().bottom));
       const height=Math.ceil(bottom-card.getBoundingClientRect().top+(card.scrollTop || 0)+parseFloat(getComputedStyle(card).paddingBottom)+6);
       invoke('report_detail_height', {height, creditHint:renderedCreditHint, detailSession:renderedDetailSession}).catch(console.error);
-      if (readyReported && celebrationSession !== renderedDetailSession) {
+      if (readyReported) {
         const session = renderedDetailSession;
-        celebrationSession = session;
         invoke('request_celebration',{detailSession:session}).catch(console.error);
       }
     }
-  });
+  })).catch(console.error);
 }
 window.addEventListener('resize', () => { reportLayout(); reportContent(); });
+function watchPixelRatio() {
+  window.matchMedia(`(resolution: ${devicePixelRatio}dppx)`).addEventListener('change', () => {
+    reportLayout(); reportContent(); watchPixelRatio();
+  }, {once:true});
+}
+watchPixelRatio();
 const systemTheme = window.matchMedia('(prefers-color-scheme: dark)');
 const applyTheme = () => {
   document.documentElement.dataset.theme = themeChoice === 'system' ? (systemTheme.matches ? 'dark' : 'light') : themeChoice;

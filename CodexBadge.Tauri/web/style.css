@@ -47,7 +47,9 @@ html, body { overflow: hidden; font-family: "Segoe UI", sans-serif; user-select:
   --surface-filter: blur(14px) saturate(125%);
 }
 .capsule-frame { position: relative; width: 30px; height: 30px; }
-:root[data-topmost="true"] .capsule-frame, .preview-global .capsule-frame { width: 72px; height: 34px; }
+.preview-global .capsule-frame { width: 72px; height: 34px; }
+body.view-capsule .capsule-frame { width: 100%; height: 100%; }
+body.view-capsule .capsule { font-size:40vw; }
 .capsule {
   position: absolute; inset: 2px;
   display: flex; align-items: center; justify-content: center;
@@ -110,11 +112,11 @@ button { cursor: pointer; font: inherit; }
 #startup-check[hidden], #topmost-check[hidden] { display: inline-block !important; visibility: hidden; }
 #plan-label { font-size:9px; opacity:.65; letter-spacing:.3px; margin-left:3px; }
 /* Preserve equal viewport gutters even when a constrained card scrolls. */
-.detail-card { scrollbar-width:thin; scrollbar-gutter:stable both-edges; padding-left:12px; padding-right:12px; }
+.detail-card { scrollbar-width:thin; padding-left:16px; padding-right:16px; }
 .capsule { color:var(--capsule-fg); }
 /* Content changes are measured first, then resized natively: no transient scrollbar. */
 .detail-card { overflow:hidden; }
-.detail-card[data-constrained="true"] { overflow-y:auto; }
+.detail-card[data-constrained="true"] { overflow-y:auto; scrollbar-gutter:stable both-edges; }
 .reset { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .detail-card[data-mode="weekly"] {padding:16px;}
 .detail-card[data-mode="weekly"] .top {height:27px;font-size:13.5px;}
@@ -122,3 +124,4 @@ button { cursor: pointer; font: inherit; }
 .detail-card[data-mode="weekly"] .weekly-reset {margin-top:12px;font-size:11.5px;line-height:18px;flex-wrap:nowrap;gap:8px;}
 .detail-card[data-mode="weekly"] #weekly-reset {min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .detail-card[data-mode="weekly"] #credit-summary {margin-left:auto;flex-shrink:0;white-space:nowrap;}
+#credit-summary {flex-shrink:0;white-space:nowrap;}

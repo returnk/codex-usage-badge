@@ -19,7 +19,6 @@ use windows::Win32::System::JobObjects::{
 };
 
 fn celebration_account_key(account: Option<u64>, response: &Value) -> Option<u64> {
-    use std::hash::{Hash, Hasher};
     let account = account?;
     let (source, limits) = if let Some(all) = response
         .get("rateLimitsByLimitId")
@@ -33,16 +32,16 @@ fn celebration_account_key(account: Option<u64>, response: &Value) -> Option<u64
     if plan.is_empty() || plan == "unknown" {
         return None;
     }
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    (
+    let identity = serde_json::to_vec(&(
+        "celebration-v1",
         account,
         source,
         plan,
         limits.get("limitId"),
         limits.get("normalModelSlug"),
-    )
-        .hash(&mut hasher);
-    Some(hasher.finish())
+    ))
+    .ok()?;
+    Some(crate::celebration::stable_fingerprint(&identity))
 }
 
 fn now() -> i64 {
@@ -377,16 +376,13 @@ pub fn run(shared: Arc<Shared>, app: AppHandle) {
                                 break;
                             }
                             m.account_key = account_key;
-                            let detector_before = m.reset_detector.clone();
-                            if let Some(key) = m.reset_detector.observe(&snapshot, account_key) {
-                                let before = m.settings.celebration_state.clone();
-                                if m.settings.celebration_state.queue(key, snapshot.fetched_at)
-                                    && crate::settings::save(&m.settings).is_err()
-                                {
-                                    m.settings.celebration_state = before;
-                                    m.reset_detector = detector_before;
-                                    diagnostics::record("celebration_event_save_failed");
-                                }
+                            let mut next = m.settings.clone();
+                            next.celebration_state.observe(&snapshot, account_key);
+                            if crate::settings::save(&next).is_ok() {
+                                m.settings = next;
+                            } else {
+                                m.settings.celebration_state.interrupt();
+                                diagnostics::record("celebration_event_save_failed");
                             }
                             m.quota_mode = domain::quota_mode(Some(&snapshot)).into();
                             m.snapshot = Some(snapshot);
@@ -433,10 +429,7 @@ pub fn run(shared: Arc<Shared>, app: AppHandle) {
 }
 
 fn account_identity(account: &Value) -> u64 {
-    use std::hash::{Hash, Hasher};
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    account.to_string().hash(&mut hasher);
-    hasher.finish()
+    crate::celebration::stable_fingerprint(account.to_string().as_bytes())
 }
 
 fn select_account(m: &mut crate::Model, identity: u64) {
@@ -448,7 +441,9 @@ fn select_account(m: &mut crate::Model, identity: u64) {
         m.quota_mode = "none".into();
         m.plan_label = None;
         m.account_key = None;
-        m.reset_detector.clear();
+        if m.quota_account.is_some() {
+            m.settings.celebration_state.interrupt();
+        }
         m.detail_credit_hint = None;
         m.credit_open = false;
         m.detail_content_height = None;
@@ -463,7 +458,11 @@ fn invalidate_account(shared: &Shared) {
     m.account_key = None;
     m.detail_credit_hint = None;
     m.credit_open = false;
-    m.reset_detector.clear();
+    m.settings.celebration_state.interrupt();
+    #[cfg(not(test))]
+    if crate::settings::save(&m.settings).is_err() {
+        diagnostics::record("celebration_event_save_failed");
+    }
 }
 
 fn set_status(shared: &Shared, app: &AppHandle, status: &str) {
@@ -483,7 +482,11 @@ fn fail(shared: &Shared, app: &AppHandle, error: &str) {
     {
         let mut m = shared.inner.lock().unwrap();
         m.quota_failed = true;
-        m.reset_detector.clear();
+        m.settings.celebration_state.interrupt();
+        #[cfg(not(test))]
+        if crate::settings::save(&m.settings).is_err() {
+            diagnostics::record("celebration_event_save_failed");
+        }
         m.account_key = None;
         m.quota_status = status.into();
     }

@@ -8,7 +8,7 @@
 <p align="center">Windows 上的 Codex 额度胶囊 · Codex usage monitor for Windows</p>
 
 <p align="center">
-  <a href="https://github.com/returnk/codex-usage-badge/releases/tag/v0.3.2"><img src="https://img.shields.io/badge/v0.3.2-release-2879E7" alt="v0.3.2 正式发布"></a>
+  <a href="https://github.com/returnk/codex-usage-badge/releases/tag/v0.3.3"><img src="https://img.shields.io/badge/v0.3.3-release-2879E7" alt="v0.3.3 正式发布"></a>
   <img src="https://img.shields.io/badge/Windows-10%20%2F%2011-1B2738" alt="Windows 10 / 11 x64">
   <img src="https://img.shields.io/badge/Tauri-2-24C8DB" alt="Tauri 2">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-34C759" alt="MIT license"></a>
@@ -28,14 +28,14 @@
 
 ## 下载
 
-**v0.3.2** · Windows 10 / 11 x64 · 正式发布版本
+**v0.3.3** · Windows 10 / 11 x64 · 正式发布版本
 
 | 安装版 · 推荐 | 便携版 |
 | --- | --- |
-| [下载安装器](https://github.com/returnk/codex-usage-badge/releases/download/v0.3.2/Codex.Badge_0.3.2_x64-setup.exe) | [下载 ZIP](https://github.com/returnk/codex-usage-badge/releases/download/v0.3.2/CodexBadge-v0.3.2-windows-x64-portable.zip) |
+| [下载安装器](https://github.com/returnk/codex-usage-badge/releases/download/v0.3.3/Codex.Badge_0.3.3_x64-setup.exe) | [下载 ZIP](https://github.com/returnk/codex-usage-badge/releases/download/v0.3.3/CodexBadge-v0.3.3-windows-x64-portable.zip) |
 | 按提示安装后运行 | 解压后运行 `codex-badge-tauri.exe` |
 
-[更新说明](https://github.com/returnk/codex-usage-badge/releases/tag/v0.3.2) · [SHA-256 校验](https://github.com/returnk/codex-usage-badge/releases/download/v0.3.2/SHA256SUMS.txt)
+[更新说明](https://github.com/returnk/codex-usage-badge/releases/tag/v0.3.3) · [SHA-256 校验](https://github.com/returnk/codex-usage-badge/releases/download/v0.3.3/SHA256SUMS.txt)
 
 无需 .NET。需要 **WebView2 Runtime**、已登录的 Codex Windows 桌面客户端和可用的 Codex CLI；安装器可引导下载 WebView2。程序尚未签名，首次运行可能出现 Windows 安全提示，请确认来自本仓库。
 
@@ -62,13 +62,13 @@
 
 ## 常见问题
 
-**没有看到胶囊？** 确认余量正在运行、ChatGPT/Codex 主窗口已经打开。普通模式下，客户端最小化时不会显示。v0.3.2 已适配新版 ChatGPT 的布局变化；胶囊位置不合适时可双击恢复默认位置。
+**没有看到胶囊？** 确认余量正在运行、ChatGPT/Codex 主窗口已经打开。普通模式下，客户端最小化时不会显示。v0.3.3 已适配新版 ChatGPT 的布局变化；胶囊位置不合适时可双击恢复默认位置。
 
 **显示 `--%`？** 确认 Codex 已登录，且 Codex CLI 可用。找不到 CLI 时，可将环境变量 `CODEX_BADGE_CLI` 设置为 `codex.exe` 的完整路径。
 
 **更新或移动便携版？** 先关闭开机启动，再退出正在运行的版本；运行新版本后按需重新开启。开机启动会记住程序所在路径。从 v0.2.x 升级需重新设置主题与位置。
 
-本版重点修复新版 ChatGPT 导致的胶囊定位问题，并统一菜单与提示框绘制。125%缩放已进行实机检查；其他缩放、跨屏及安装升级仍在持续验证。[查看发布说明](CodexBadge.Tauri/docs/releases/v0.3.2.md)
+本版修复图片查看期间失锚、胶囊缩放与浮窗裁切，并完善跨重启提前额度恢复烟花。自动检查与此前单台 125% 实机证据不等于多机、混合 DPI 或完整安装升级验收。[查看发布说明](CodexBadge.Tauri/docs/releases/v0.3.3.md)
 
 ## 隐私与反馈
 
@@ -80,8 +80,8 @@
 
 <sub>第三方开源工具，非 OpenAI 官方产品。</sub>
 
-## v0.3.2 更新
+## v0.3.3 更新
 
-设置 › 检查更新可查看版本与更新说明。安装版支持用户主动点击一键更新；绿色版请从发布页下载 ZIP 手动替换。不会自动检查、下载或安装。更新包使用独立签名校验，但这不等于 Windows Authenticode 代码签名。
+修复图片查看失锚、DPI 与头像居中、详情和重置卡裁切，宽侧栏详情卡自动靠左。提前额度恢复证据和待播烟花按账号持久保存，播放开始并保存成功后才消费事件；自然到期不放烟花，升级后的首次有效读取只建立历史。设置 › 检查更新可查看中文更新说明。安装版支持用户主动点击一键更新；绿色版请从发布页下载 ZIP 手动替换。不会自动检查、下载或安装。更新包使用独立签名校验，但这不等于 Windows Authenticode 代码签名。
 
 [English overview](docs/README.en.md) · 如果余量对你有帮助，欢迎给项目一个 Star。

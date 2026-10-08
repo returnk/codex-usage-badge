@@ -202,11 +202,10 @@ fn prepare(app: &AppHandle, point: (i32, i32)) -> Result<bool, String> {
     let monitor = native::monitor_at(point).ok_or("update monitor unavailable")?;
     let (x, y, w, h) = frame(point, monitor.area, monitor.dpi);
     window.hide().map_err(|e| e.to_string())?;
+    let hwnd = window.hwnd().map_err(|e| e.to_string())?.0 as isize;
+    native::move_only(hwnd, x, y);
     window
         .set_size(tauri::PhysicalSize::new(w as u32, h as u32))
-        .map_err(|e| e.to_string())?;
-    window
-        .set_position(tauri::PhysicalPosition::new(x, y))
         .map_err(|e| e.to_string())?;
     clip(&window);
     let controller = app.state::<Controller>();
@@ -423,15 +422,12 @@ pub fn move_update_drag(
         target.1 + size.height as i32 / 2,
     ))
     .ok_or("monitor unavailable")?;
-    let (x, y) = drag_position(
-        origin,
-        (dx, dy),
-        scale,
-        (size.width as i32, size.height as i32),
-        monitor.area,
-    );
+    let (_, _, width, height) = frame(target, monitor.area, monitor.dpi);
+    let (x, y) = drag_position(origin, (dx, dy), scale, (width, height), monitor.area);
+    let hwnd = window.hwnd().map_err(|e| e.to_string())?.0 as isize;
+    native::move_only(hwnd, x, y);
     window
-        .set_position(tauri::PhysicalPosition::new(x, y))
+        .set_size(tauri::PhysicalSize::new(width as u32, height as u32))
         .map_err(|e| e.to_string())
 }
 #[tauri::command]
@@ -504,20 +500,25 @@ mod tests {
     }
     #[test]
     fn install_requires_visible_new_release_and_cannot_start_twice() {
+        let version: Vec<u64> = env!("CARGO_PKG_VERSION")
+            .split('.')
+            .map(|v| v.parse().unwrap())
+            .collect();
+        let next = format!("{}.{}.{}", version[0], version[1], version[2] + 1);
         let mut state = UiState::default();
         assert!(state.begin_install().is_err());
         state.visible = true;
         state.result = Some(json!({"available":false,"version":"0.3.1"}));
         assert!(state.begin_install().is_err());
-        state.result = Some(json!({"available":true,"version":"0.3.3"}));
-        assert_eq!(state.begin_install().unwrap(), "0.3.3");
+        state.result = Some(json!({"available":true,"version":next}));
+        assert_eq!(state.begin_install().unwrap(), next);
         assert!(state.begin_install().is_err());
         state.visible = false;
         assert!(
             !state.begin(),
             "reopening a download must not replace release state"
         );
-        assert_eq!(state.result.as_ref().unwrap()["version"], "0.3.3");
+        assert_eq!(state.result.as_ref().unwrap()["version"], next);
     }
     #[test]
     fn manifest_must_match_checked_release_and_trusted_download_origin() {

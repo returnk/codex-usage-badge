@@ -86,6 +86,15 @@ mod tests {
         assert!(decode(Some(legacy), true).celebration_state.welcome_done);
     }
     #[test]
+    fn malformed_recovery_history_cannot_reset_unrelated_settings() {
+        let bytes=br#"{"theme":"system","offsetX":18.5,"offsetY":-7.0,"startWithWindows":true,"celebrationState":{"welcome_done":true,"histories":"corrupt"}}"#;
+        let settings = decode(Some(bytes), true);
+        assert_eq!(settings.theme, crate::domain::Theme::System);
+        assert_eq!((settings.offset_x, settings.offset_y), (18.5, -7.0));
+        assert!(settings.start_with_windows);
+        assert!(settings.celebration_state.welcome_done);
+    }
+    #[test]
     fn settings_round_trip_keeps_glass_default_theme() {
         let source = Settings {
             offset_x: 18.5,

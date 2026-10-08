@@ -19,20 +19,20 @@ pub enum Theme {
     Glass,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct QuotaWindow {
     pub remaining: f64,
     pub minutes: u32,
     pub resets_at: Option<i64>,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ResetCredit {
     pub id: String,
     pub expires_at: i64,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Snapshot {
     pub five_hour: Option<QuotaWindow>,
     pub weekly: Option<QuotaWindow>,
@@ -54,7 +54,10 @@ pub struct Settings {
     pub notifications_enabled: bool,
     #[serde(default)]
     pub reminder_state: crate::reminders::ReminderTracker,
-    #[serde(default = "crate::celebration::CelebrationState::existing_install")]
+    #[serde(
+        default = "crate::celebration::CelebrationState::existing_install",
+        deserialize_with = "read_celebration_state"
+    )]
     pub celebration_state: crate::celebration::CelebrationState,
     #[serde(default, deserialize_with = "read_global_position")]
     pub global_position: Option<GlobalPosition>,
@@ -66,6 +69,14 @@ pub struct GlobalPosition {
     pub device: String,
     pub x_dip: f64,
     pub y_dip: f64,
+}
+
+fn read_celebration_state<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<crate::celebration::CelebrationState, D::Error> {
+    let value = Value::deserialize(deserializer)?;
+    Ok(serde_json::from_value(value)
+        .unwrap_or_else(|_| crate::celebration::CelebrationState::existing_install()))
 }
 
 fn read_global_position<'de, D: serde::Deserializer<'de>>(
@@ -369,6 +380,14 @@ pub fn badge_owner(codex_owner: isize, always_on_top: bool) -> isize {
 pub fn dip_to_px(dip: f64, dpi: u32) -> i32 {
     (dip * dpi.max(96) as f64 / 96.0).round() as i32
 }
+pub fn aligned_webview_zoom(dpi: u32, pixel_ratio: f64, zoom: f64) -> Option<f64> {
+    if !pixel_ratio.is_finite() || pixel_ratio <= 0.0 || !zoom.is_finite() || zoom <= 0.0 {
+        return None;
+    }
+    let ratio = dpi.max(96) as f64 / 96.0 / pixel_ratio;
+    let next = zoom * ratio;
+    ((ratio - 1.0).abs() > 0.001 && (0.25..=5.0).contains(&next)).then_some(next)
+}
 pub fn capsule_origin(anchor: (i32, i32), dpi: u32, offset: (f64, f64)) -> (i32, i32) {
     let width = dip_to_px(30.0, dpi);
     let inset = dip_to_px(2.0, dpi);
@@ -401,6 +420,22 @@ pub fn capsule_frame(
             capsule_window_rect(x, y, dpi)
         })
         .or_else(|| settings.always_on_top.then_some(last).flatten())
+}
+pub fn avatar_capsule_frame(
+    settings: &Settings,
+    anchor: Option<(i32, i32)>,
+    dpi: u32,
+    diameter: f64,
+) -> Option<Rect> {
+    anchor.map(|point| {
+        let size = dip_to_px(diameter, dpi);
+        (
+            point.0 - size / 2 + dip_to_px(settings.offset_x, dpi),
+            point.1 - size - dip_to_px(10.0, dpi) + dip_to_px(settings.offset_y, dpi),
+            size,
+            size,
+        )
+    })
 }
 pub fn clamp_to_work_area(
     position: (i32, i32),
@@ -539,7 +574,10 @@ pub fn place_detail_in_sidebar(
         let left = nav.0 + nav.2;
         let right = sidebar.0 + sidebar.2;
         if right - left >= size.0 + 2 * gap {
-            let rect = (left + gap, anchor.1 + anchor.3 - size.1, size.0, size.1);
+            let inset = (right - left - size.0) / 2;
+            // Wide sidebars align left; the card already has 2 DIP transparent padding.
+            let x = left + if inset > 2 * gap { 0 } else { inset };
+            let rect = (x, anchor.1 + anchor.3 - size.1, size.0, size.1);
             if rect.0 >= area.0
                 && rect.1 >= area.1
                 && rect.0 + rect.2 <= area.2
@@ -763,6 +801,81 @@ pub fn reset_display(epoch: Option<i64>, weekly: bool, now: i64) -> String {
 mod tests {
     use super::*;
     #[test]
+    fn webview_zoom_aligns_css_pixels_with_native_dips_without_double_scaling() {
+        for dpi in [96, 120, 144, 168, 192, 216, 240, 288] {
+            let native = dpi as f64 / 96.0;
+            for browser in [1.0, 1.25, 1.5, 2.0, 2.5] {
+                let zoom = aligned_webview_zoom(dpi, browser, 1.0).unwrap_or(1.0);
+                assert!((browser * zoom - native).abs() < 0.00001);
+                assert_eq!(aligned_webview_zoom(dpi, browser * zoom, zoom), None);
+            }
+        }
+        for bad in [0.0, -1.0, f64::NAN, f64::INFINITY] {
+            assert_eq!(aligned_webview_zoom(144, bad, 1.0), None);
+        }
+    }
+    #[test]
+    fn avatar_sized_capsule_keeps_center_gap_and_drag_offset_at_every_scale() {
+        for dpi in [96, 120, 144, 168, 192, 216, 240, 288] {
+            for diameter in [28.0, 36.0, 44.0] {
+                let anchor = (dip_to_px(26.0, dpi), dip_to_px(850.0, dpi));
+                let settings = Settings::default();
+                let rect = avatar_capsule_frame(&settings, Some(anchor), dpi, diameter).unwrap();
+                assert_eq!(rect.2, dip_to_px(diameter, dpi));
+                assert!((rect.0 as f64 + rect.2 as f64 / 2.0 - anchor.0 as f64).abs() <= 0.5);
+                assert_eq!(rect.1 + rect.3, anchor.1 - dip_to_px(10.0, dpi));
+                let moved = avatar_capsule_frame(
+                    &Settings {
+                        offset_x: 5.0,
+                        offset_y: -3.0,
+                        ..settings
+                    },
+                    Some(anchor),
+                    dpi,
+                    diameter,
+                )
+                .unwrap();
+                assert_eq!(
+                    (moved.0 - rect.0, moved.1 - rect.1),
+                    (dip_to_px(5.0, dpi), dip_to_px(-3.0, dpi))
+                );
+            }
+        }
+    }
+    #[test]
+    fn popups_fit_common_desktops_portrait_and_negative_monitor_coordinates() {
+        for area in [
+            (0, 0, 1366, 728),
+            (0, 0, 1920, 1040),
+            (0, 0, 2560, 1400),
+            (0, 0, 3840, 2088),
+            (0, 0, 1080, 1880),
+            (-3840, 0, 0, 2088),
+        ] {
+            for dpi in [96, 120, 144, 192, 240, 288] {
+                let p = |v| dip_to_px(v, dpi);
+                for (x, y) in [
+                    (area.0 + p(8.0), area.1 + p(8.0)),
+                    (area.2 - p(44.0), area.3 - p(80.0)),
+                ] {
+                    let capsule = (x, y, p(36.0), p(36.0));
+                    for height in [148.0, 198.0, 280.0] {
+                        let detail =
+                            place_popup(capsule, (p(270.0), p(height)), area, &[capsule], p(8.0))
+                                .unwrap();
+                        assert!(
+                            detail.0 >= area.0
+                                && detail.1 >= area.1
+                                && detail.0 + detail.2 <= area.2
+                                && detail.1 + detail.3 <= area.3
+                        );
+                        assert!(!rects_intersect(detail, capsule));
+                    }
+                }
+            }
+        }
+    }
+    #[test]
     fn adapted_detail_and_credit_fit_screen_edges_at_supported_scales() {
         for dpi in [96, 120, 144] {
             let p = |v| dip_to_px(v, dpi);
@@ -863,10 +976,17 @@ mod tests {
         }
     }
     #[test]
-    fn detail_keeps_its_default_left_inset_when_the_sidebar_widens() {
-        for dpi in [96, 120, 144, 168, 192] {
+    fn detail_centers_in_compact_sidebars_and_aligns_left_in_wide_sidebars() {
+        for dpi in [96, 120, 144, 168, 192, 216, 240, 288] {
             let p = |v| dip_to_px(v, dpi);
-            for body in [288.0, 340.0, 420.0] {
+            for (body, centered) in [
+                (288.0, true),
+                (302.0, true),
+                (304.0, false),
+                (340.0, false),
+                (375.0, false),
+                (420.0, false),
+            ] {
                 let nav = (p(60.0), p(40.0), p(52.0), p(800.0));
                 let sidebar = (p(60.0), p(40.0), p(52.0 + body), p(800.0));
                 let capsule = (p(68.0), p(760.0), p(30.0), p(30.0));
@@ -875,17 +995,27 @@ mod tests {
                     (p(270.0), p(148.0)),
                     (0, 0, p(1200.0), p(900.0)),
                     &[capsule, nav],
-                    p(9.0),
+                    p(8.0),
                     Some(sidebar),
                     Some(nav),
                 )
                 .unwrap();
                 let left = rect.0 - (nav.0 + nav.2);
                 let right = sidebar.0 + sidebar.2 - (rect.0 + rect.2);
-                assert_eq!(left, p(9.0), "dpi={dpi} body={body}");
-                if body == 288.0 {
-                    assert!((left - right).abs() <= 1);
+                if centered {
+                    assert!(
+                        (left - right).abs() <= 1,
+                        "dpi={dpi} body={body}: {left} vs {right}"
+                    );
+                    assert!(left >= p(8.0) - 1);
+                } else {
+                    assert_eq!(
+                        left, 0,
+                        "dpi={dpi} body={body}: excessive centered whitespace"
+                    );
                 }
+                assert!(!rects_intersect(rect, nav));
+                assert!(!rects_intersect(rect, capsule));
             }
         }
     }

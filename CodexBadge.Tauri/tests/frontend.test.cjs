@@ -26,7 +26,7 @@ async function page(view, overrides = {}, transport) {
     createElement: element, querySelectorAll() { return [...elements.values()]; }, addEventListener(name, handler) { listeners.set(`document:${name}`, handler); } };
   const media = { matches: false, addEventListener(name, handler) { listeners.set(`media:${name}`, handler); } };
   const window = { __TAURI__: { core: { invoke(command, args) { calls.push([command, args]); return transport ? transport(command,args,state) : Promise.resolve(command === 'get_state' ? state : true); } },
-    event: { listen(name,handler) { listeners.set(`tauri:${name}`,handler); return Promise.resolve(() => {}); } } }, matchMedia() { return media; },
+    event: { listen(name,handler) { listeners.set(`tauri:${name}`,handler); return Promise.resolve(() => {}); } } }, matchMedia(query) { return query.startsWith('(resolution:') ? {addEventListener(name,handler){listeners.set(`scale:${name}`,handler);}} : media; },
     addEventListener(name,handler) { listeners.set(`window:${name}`,handler); } };
   vm.runInNewContext(fs.readFileSync(`${__dirname}/../web/main.js`, 'utf8'), {
     window, document, location: { search: `?view=${view}` }, URLSearchParams, Date, Math, innerWidth: 71, innerHeight: 30,
@@ -44,6 +44,13 @@ test('global capsule right click suppresses browser menu and requests our popup'
   assert.equal(prevented, true);
   assert.ok(p.calls.some(([command]) => command === 'open_capsule_menu'));
   assert.ok(!p.calls.some(([command]) => command === 'start_drag'));
+});
+test('a display scale change recalibrates even without a viewport resize', async () => {
+  const p=await page('capsule');
+  const before=p.calls.filter(([cmd])=>cmd==='sync_webview_scale').length;
+  p.listeners.get('scale:change')();
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.ok(p.calls.filter(([cmd])=>cmd==='sync_webview_scale').length>before);
 });
 
 test('one two and three digit quotas update only the numeric span', async () => {
@@ -276,6 +283,7 @@ test('detail height remains intrinsic after a constrained panel scrolls', async 
   card.children=[{hidden:false,getBoundingClientRect:()=>({bottom:182-card.scrollTop})}];
   async function measure() {
     p.listeners.get('window:resize')();
+    await new Promise(resolve=>setImmediate(resolve));
     while(p.frames.length) {await p.frames.shift()();}
     return p.calls.filter(([cmd])=>cmd==='report_detail_height').at(-1)[1].height;
   }
@@ -320,4 +328,18 @@ test('unavailable weekly sample keeps mode without inventing a percentage and pe
 test('quota detail has no refresh or update controls and cannot retain update results', async () => {
  const p=await page('detail');
  for(const id of ['refresh-quota','check-update','update-status','update-notes','update-release','quota-status']) assert.equal(p.elements.has(id),false,id);
+});
+
+test('an already open detail session retries celebration when new state arrives', async () => {
+  const p=await page('detail',{detailSession:8});
+  const card=p.elements.get('app').querySelector('.detail-card');
+  card.children=[{hidden:false,getBoundingClientRect:()=>({bottom:140})}];
+  async function settle(){
+    for(let i=0;i<8;i++) {await new Promise(resolve=>setImmediate(resolve));while(p.frames.length) await p.frames.shift()();}
+  }
+  await settle();
+  const before=p.calls.filter(([cmd])=>cmd==='request_celebration').length;
+  assert.ok(before>0);
+  await p.listeners.get('tauri:state-updated')();await settle();
+  assert.ok(p.calls.filter(([cmd])=>cmd==='request_celebration').length>before);
 });

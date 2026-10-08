@@ -42,3 +42,34 @@ test('cancel and replacement stop old bursts and reduced motion produces no part
   r.api.play(r.canvas,'reset');r.api.play(r.canvas,'welcome');r.advance(400);assert.equal(r.calls.length,3);
   const quiet=renderer(true);quiet.api.play(quiet.canvas,'reset');assert.equal(quiet.calls.length,0);assert.equal(quiet.timers.size,0);
 });
+
+async function overlay({rendererFails=false,saveFails=false}={}) {
+  const calls=[],frames=[];
+  const effect={kind:'reset',playId:12,origin:{x:.5,y:.6}};
+  const window={BadgeCelebration:{play(){calls.push('play');if(rendererFails)throw new Error('renderer failed');},cancel(){calls.push('cancel');}},__TAURI__:{
+    core:{async invoke(cmd,args){calls.push([cmd,args]);if(cmd==='celebration_ready')return effect;if(cmd==='celebration_started'){if(saveFails)throw new Error('save failed');return true;}}},
+    event:{listen:async()=>{}}
+  }};
+  vm.runInNewContext(fs.readFileSync(`${__dirname}/../web/celebration-overlay.js`,'utf8'),{
+    window,document:{getElementById:()=>({})},requestAnimationFrame:fn=>frames.push(fn),setTimeout:()=>{},console:{error(){}}
+  });
+  async function settle(){for(let i=0;i<8;i++){await new Promise(resolve=>setImmediate(resolve));while(frames.length)frames.shift()();}}
+  await settle();return calls;
+}
+test('overlay acknowledges the exact playback only after the renderer starts',async()=>{
+  const calls=await overlay();
+  assert.ok(calls.indexOf('play')<calls.findIndex(c=>c[0]==='celebration_started'));
+  assert.equal(calls.find(c=>c[0]==='celebration_started')[1].playId,12);
+  assert.ok(!calls.some(c=>c[0]==='celebration_failed'));
+});
+test('renderer failure keeps the event retryable without acknowledging it',async()=>{
+  const calls=await overlay({rendererFails:true});
+  assert.ok(calls.includes('cancel'));
+  assert.ok(!calls.some(c=>c[0]==='celebration_started'));
+  assert.equal(calls.find(c=>c[0]==='celebration_failed')[1].playId,12);
+});
+test('failed durable acknowledgement cancels playback and releases the attempt',async()=>{
+  const calls=await overlay({saveFails:true});
+  assert.ok(calls.includes('cancel'));
+  assert.equal(calls.find(c=>c[0]==='celebration_failed')[1].playId,12);
+});

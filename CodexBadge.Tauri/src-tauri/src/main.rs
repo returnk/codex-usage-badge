@@ -35,7 +35,6 @@ struct Shared {
 
 struct Model {
     celebration_overlay: celebration_window::Overlay,
-    reset_detector: celebration::ResetDetector,
     account_key: Option<u64>,
     quota_account: Option<u64>,
     plan_label: Option<String>,
@@ -55,6 +54,7 @@ struct Model {
     last_focus: Option<(isize, u32, u32, isize)>,
     last_data_signature: Option<(String, Option<u64>, usize, i64)>,
     anchor: Option<(i32, i32)>,
+    avatar_diameter: Option<f64>,
     anchor_frame: Option<(i32, i32, i32, i32)>,
     navigation: Option<domain::Rect>,
     sidebar: Option<domain::Rect>,
@@ -101,7 +101,6 @@ impl Default for Model {
     fn default() -> Self {
         Self {
             celebration_overlay: Default::default(),
-            reset_detector: Default::default(),
             account_key: None,
             quota_account: None,
             plan_label: None,
@@ -121,6 +120,7 @@ impl Default for Model {
             last_focus: None,
             last_data_signature: None,
             anchor: None,
+            avatar_diameter: None,
             anchor_frame: None,
             navigation: None,
             sidebar: None,
@@ -235,7 +235,7 @@ fn release_badge_model(m: &mut Model) -> [isize; 4] {
     let windows = m.windows;
     forget_windows(m, 0..3);
     m.snapshot = None;
-    m.reset_detector.clear();
+    m.settings.celebration_state.interrupt();
     m.account_key = None;
     m.last_capsule = None;
     m.host_identity = None;
@@ -397,6 +397,8 @@ fn layout(m: &mut Model, app: &AppHandle) {
             monitor.area,
             monitor.dpi,
         ))
+    } else if let Some(diameter) = m.avatar_diameter {
+        domain::avatar_capsule_frame(&m.settings, anchor, reference_dpi, diameter)
     } else {
         domain::capsule_frame(&m.settings, anchor, reference_dpi, m.last_capsule)
     };
@@ -411,7 +413,8 @@ fn layout(m: &mut Model, app: &AppHandle) {
     let (width_dip, height_dip) = if m.settings.always_on_top {
         (72.0, 34.0)
     } else {
-        (30.0, 30.0)
+        let diameter = m.avatar_diameter.unwrap_or(30.0);
+        (diameter, diameter)
     };
     let capsule_w = size(width_dip - 4.0);
     let capsule_h = size(height_dip - 4.0);
@@ -741,7 +744,8 @@ fn track_badge_frame(shared: &Arc<Shared>, app: &AppHandle) {
     let dimensions = if m.settings.always_on_top {
         (72.0, 34.0)
     } else {
-        (30.0, 30.0)
+        let diameter = m.avatar_diameter.unwrap_or(30.0);
+        (diameter, diameter)
     };
     if let Some(drag) = &mut m.drag {
         if native::left_mouse_down() {
@@ -772,11 +776,10 @@ fn track_badge_frame(shared: &Arc<Shared>, app: &AppHandle) {
                 }
             }
         } else {
-            let settings = finish_drag(&mut m);
-            drop(m);
-            if let Some(settings) = settings {
+            if let Some(settings) = finish_drag(&mut m) {
                 let _ = settings::save(&settings);
             }
+            drop(m);
             return;
         }
         drop(m);
@@ -812,6 +815,7 @@ fn track_badge_frame(shared: &Arc<Shared>, app: &AppHandle) {
             m.anchor_generation += 1;
             if owner_changed {
                 m.anchor = None;
+                m.avatar_diameter = None;
                 m.anchor_frame = None;
                 m.last_host_frame = None;
             }
@@ -825,7 +829,7 @@ fn track_badge_frame(shared: &Arc<Shared>, app: &AppHandle) {
         if m.host_identity.is_some() && identity.is_some() && m.host_identity != identity {
             shared.quota_generation.fetch_add(1, Ordering::AcqRel);
             m.snapshot = None;
-            m.reset_detector.clear();
+            m.settings.celebration_state.interrupt();
             m.account_key = None;
         }
         m.host = host;
@@ -1270,6 +1274,9 @@ fn probe_anchor(shared: Arc<Shared>) {
             if committed {
                 m.navigation = probe.navigation;
                 m.sidebar = probe.sidebar;
+                if anchor.is_some() {
+                    m.avatar_diameter = probe.avatar_diameter();
+                }
             }
         }
         thread::sleep(Duration::from_millis(250));
@@ -1458,6 +1465,28 @@ fn request_missing_refresh(m: &mut Model, at: Instant) -> bool {
 }
 
 #[tauri::command]
+fn sync_webview_scale(pixel_ratio: f64, window: tauri::WebviewWindow) {
+    if !pixel_ratio.is_finite() || pixel_ratio <= 0.0 {
+        return;
+    }
+    let Ok(hwnd) = window.hwnd() else {
+        return;
+    };
+    let dpi = native::dpi(hwnd.0 as isize);
+    let label = window.label().to_owned();
+    let _ = window.with_webview(move |webview| unsafe {
+        let controller = webview.controller();
+        let mut zoom = 1.0;
+        if controller.ZoomFactor(&mut zoom).is_ok() {
+            if let Some(next) = domain::aligned_webview_zoom(dpi, pixel_ratio, zoom) {
+                let success = controller.SetZoomFactor(next).is_ok();
+                diagnostics::record(format!("webview_scale label={label} dpi={dpi} viewport={pixel_ratio} actual={zoom} requested={next} success={success}"));
+            }
+        }
+    });
+}
+
+#[tauri::command]
 fn report_capsule_layout(
     frame: [f64; 4],
     capsule: [f64; 4],
@@ -1566,8 +1595,8 @@ fn cycle_theme(delta: i32, state: State<'_, Arc<Shared>>, app: AppHandle) {
     m.last_theme_change = Some(now);
     m.settings.theme = domain::cycle_theme(m.settings.theme, delta);
     let settings = m.settings.clone();
-    drop(m);
     let _ = settings::save(&settings);
+    drop(m);
     sync_tray(&app, &settings);
     let _ = app.emit("state-updated", ());
 }
@@ -1575,9 +1604,7 @@ fn cycle_theme(delta: i32, state: State<'_, Arc<Shared>>, app: AppHandle) {
 #[tauri::command]
 fn reset_position(from_capsule: Option<bool>, state: State<'_, Arc<Shared>>) {
     let mut m = state.inner.lock().unwrap();
-    let settings = reset_position_model(&mut m, from_capsule.unwrap_or(false));
-    drop(m);
-    if let Some(settings) = settings {
+    if let Some(settings) = reset_position_model(&mut m, from_capsule.unwrap_or(false)) {
         let _ = settings::save(&settings);
     }
 }
@@ -1610,8 +1637,8 @@ fn change_startup(state: &Arc<Shared>, app: &AppHandle) -> bool {
         let mut m = state.inner.lock().unwrap();
         m.settings.start_with_windows = desired;
         let settings = m.settings.clone();
-        drop(m);
         let _ = settings::save(&settings);
+        drop(m);
         sync_tray(app, &settings);
         let _ = app.emit("state-updated", ());
     }
@@ -1624,14 +1651,9 @@ fn toggle_topmost(state: State<'_, Arc<Shared>>, app: AppHandle) -> Result<bool,
 }
 
 fn change_topmost(state: &Arc<Shared>, app: &AppHandle) -> Result<bool, String> {
-    let (desired, owner, windows, previous) = {
+    let (desired, owner, windows) = {
         let m = state.inner.lock().unwrap();
-        (
-            !m.settings.always_on_top,
-            m.owner,
-            m.windows,
-            m.settings.clone(),
-        )
+        (!m.settings.always_on_top, m.owner, m.windows)
     };
     diagnostics::record(format!("topmost_request enabled={desired} owner={owner}"));
     if let Err(error) = apply_badge_mode(windows, owner, desired) {
@@ -1640,6 +1662,7 @@ fn change_topmost(state: &Arc<Shared>, app: &AppHandle) -> Result<bool, String> 
         return Err(error);
     }
     let mut m = state.inner.lock().unwrap();
+    let previous = m.settings.clone();
     m.settings.always_on_top = desired;
     hide_flyouts(&mut m);
     m.capsule_visible = native::is_visible(windows[0]);
@@ -1648,14 +1671,15 @@ fn change_topmost(state: &Arc<Shared>, app: &AppHandle) -> Result<bool, String> 
             m.settings.global_position = native::global_position((x, y));
         }
     }
-    let settings = m.settings.clone();
-    drop(m);
-    if let Err(error) = settings::save(&settings) {
-        state.inner.lock().unwrap().settings = previous;
+    if let Err(error) = settings::save(&m.settings) {
+        m.settings = previous;
+        drop(m);
         let _ = apply_badge_mode(windows, owner, !desired);
         diagnostics::record(format!("topmost_save_failed {error}"));
         return Err(error);
     }
+    let settings = m.settings.clone();
+    drop(m);
     sync_tray(app, &settings);
     diagnostics::record(format!(
         "topmost_applied enabled={desired} owner={} visible={}",
@@ -1918,9 +1942,7 @@ fn start_drag(state: State<'_, Arc<Shared>>) {
 #[tauri::command]
 fn stop_drag(state: State<'_, Arc<Shared>>) {
     let mut m = state.inner.lock().unwrap();
-    let settings = finish_drag(&mut m);
-    drop(m);
-    if let Some(settings) = settings {
+    if let Some(settings) = finish_drag(&mut m) {
         let _ = settings::save(&settings);
     }
 }
@@ -2005,6 +2027,8 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             celebration_window::request_celebration,
             celebration_window::celebration_ready,
+            celebration_window::celebration_started,
+            celebration_window::celebration_failed,
             get_state,
             update_window::get_update_state,
             update_window::update_ready,
@@ -2016,6 +2040,7 @@ fn main() {
             update_window::end_update_drag,
             updates::open_release,
             report_capsule_layout,
+            sync_webview_scale,
             set_input_regions,
             report_detail_height,
             window_ready,

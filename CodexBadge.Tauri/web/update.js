@@ -6,10 +6,15 @@ let theme='glass';
 function applyTheme(){document.documentElement.dataset.theme=theme==='system'?(systemTheme.matches?'dark':'light'):theme;}
 systemTheme.addEventListener('change',applyTheme);
 function noteSummary(notes){
- const lines=(notes||'暂无更新说明').replace(/\r/g,'').split('\n').map(line=>line.trim()).filter(line=>line&&!/^\|/.test(line));
+ let source=(notes||'暂无更新说明').replace(/\r/g,'');
+ const hidden=source.match(/<!--\s*codex-badge-notes-zh\s*\n([\s\S]*?)-->/i);
+ const heading=source.match(/^#{1,6}\s+中文更新说明[^\n]*\n/m);
+ if(hidden) source=hidden[1];
+ else if(heading) source=source.slice(heading.index+heading[0].length).split(/^#{1,6}\s/m)[0];
+ const lines=source.split('\n').map(line=>line.trim()).filter(line=>line&&!/^\|/.test(line)&&/[\u3400-\u9fff]/.test(line));
  const bullets=lines.filter(line=>/^[-*•]\s/.test(line));
  const selected=bullets.length?bullets:lines.filter(line=>!/^#{1,6}\s/.test(line));
- return selected.slice(0,2).map(line=>line.replace(/^[-*•]\s/,'').replace(/\*\*/g,'').replace(/\[([^\]]+)\]\([^)]*\)/g,'$1'));
+ return selected.length?selected.slice(0,2).map(line=>line.replace(/^[-*•]\s/,'').replace(/\*\*/g,'').replace(/\[([^\]]+)\]\([^)]*\)/g,'$1')):['此版本暂未提供中文更新说明，请查看发布页。'];
 }
 function notes(lines,message=false){
  const list=el('update-notes');list.className=message?'message':'';
@@ -29,6 +34,7 @@ async function render(){again=true;if(rendering)return;rendering=true;try{do{aga
  primary.title=release?.available&&!state.installed?'绿色版或未确认安装位置，请通过发布页下载新版。':'下载并验证后升级，完成后重新启动。';
  const status=el('download-status');status.hidden=!state.installing&&!(release?.available&&!state.installed);
  status.textContent=!state.installed?'绿色版／未确认安装位置，请通过发布页更新。':state.stage==='preparing'?'正在获取签名更新包…':state.stage==='installing'?'验证完成，即将退出升级并重新启动。':state.total>0?`已下载 ${Math.min(100,Math.floor(state.downloaded/state.total*100))}%`:`已下载 ${((state.downloaded||0)/1048576).toFixed(1)} MB`;
+ await invoke('sync_webview_scale',{pixelRatio:devicePixelRatio});
  requestAnimationFrame(()=>requestAnimationFrame(()=>invoke('update_ready',{session:state.session}).catch(console.error)));
  }while(again);}catch(error){console.error(error);el('update-title').textContent='暂时无法检查更新';notes(['窗口连接失败，请关闭后重试。'],true);}finally{rendering=false;}}
 el('close-update').addEventListener('click',()=>invoke('close_update'));
@@ -69,5 +75,8 @@ header.addEventListener('pointercancel',finishDrag);
 header.addEventListener('lostpointercapture',finishDrag);
 document.addEventListener('keydown',event=>{if(event.key==='Escape'){event.preventDefault();invoke('close_update');}});
 document.addEventListener('contextmenu',event=>event.preventDefault());
+window.addEventListener('resize',render);
+function watchPixelRatio(){window.matchMedia(`(resolution: ${devicePixelRatio}dppx)`).addEventListener('change',()=>{render();watchPixelRatio();},{once:true});}
+watchPixelRatio();
 window.__TAURI__.event.listen('update-state',render).then(render);
 window.__TAURI__.event.listen('state-updated',render);

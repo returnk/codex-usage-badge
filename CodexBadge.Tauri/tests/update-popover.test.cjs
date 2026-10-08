@@ -1,13 +1,25 @@
 const test=require('node:test'),assert=require('node:assert/strict'),vm=require('node:vm'),fs=require('node:fs');
 async function page(state,transport){const elements=new Map(),calls=[],listeners=new Map();const element=id=>{if(!elements.has(id))elements.set(id,{textContent:'',hidden:false,disabled:false,style:{},setPointerCapture(){},children:[],replaceChildren(...items){this.children=items;this.textContent=items.map(item=>item.textContent).join('\n');},addEventListener(event,fn){listeners.set(`${id}:${event}`,fn)}});return elements.get(id)};
 const document={documentElement:{dataset:{}},getElementById:element,createElement:()=>({textContent:''}),addEventListener(event,fn){listeners.set(`document:${event}`,fn)}};
-const window={matchMedia:()=>({matches:false,addEventListener(){}}),__TAURI__:{core:{invoke:async(command,args)=>{calls.push([command,args]);return transport?transport(command,args):command==='get_update_state'?state:true}},event:{listen:async(event,fn)=>{listeners.set(event,fn)}}}};
-vm.runInNewContext(fs.readFileSync(`${__dirname}/../web/update.js`,'utf8'),{document,window,requestAnimationFrame:fn=>fn(),console});await new Promise(resolve=>setImmediate(resolve));return {elements,calls,listeners};}
+const window={addEventListener(event,fn){listeners.set(`window:${event}`,fn)},matchMedia:()=>({matches:false,addEventListener(){}}),__TAURI__:{core:{invoke:async(command,args)=>{calls.push([command,args]);return transport?transport(command,args):command==='get_update_state'?state:true}},event:{listen:async(event,fn)=>{listeners.set(event,fn)}}}};
+vm.runInNewContext(fs.readFileSync(`${__dirname}/../web/update.js`,'utf8'),{document,window,devicePixelRatio:1,requestAnimationFrame:fn=>fn(),console});await new Promise(resolve=>setImmediate(resolve));return {elements,calls,listeners};}
 test('loading update popover retains fixed slots and disables release action',async()=>{const p=await page({session:1,checking:true,theme:'glass',currentVersion:'0.3.2'});assert.equal(p.elements.get('update-title').textContent,'正在检查更新…');assert.equal(p.elements.get('release-button').disabled,true);assert.ok(p.calls.some(([cmd])=>cmd==='update_ready'));});
-test('release notes are text and closing never changes quota state',async()=>{const p=await page({session:2,checking:false,theme:'system',currentVersion:'0.3.2',release:{available:true,version:'0.3.3',tag:'v0.3.3',notes:'<script>bad()</script>'}});assert.equal(p.elements.get('update-title').textContent,'发现新版本');assert.equal(p.elements.get('update-notes').textContent,'<script>bad()</script>');await p.listeners.get('release-button:click')();assert.ok(p.calls.some(([cmd,args])=>cmd==='open_release'&&args.tag==='v0.3.3'));await p.listeners.get('close-update:click')();assert.ok(p.calls.some(([cmd])=>cmd==='close_update'));assert.ok(!p.calls.some(([cmd])=>cmd==='refresh_quota'));});
+test('release notes are text and closing never changes quota state',async()=>{const p=await page({session:2,checking:false,theme:'system',currentVersion:'0.3.2',release:{available:true,version:'0.3.3',tag:'v0.3.3',notes:'<script>修复()</script>'}});assert.equal(p.elements.get('update-title').textContent,'发现新版本');assert.equal(p.elements.get('update-notes').textContent,'<script>修复()</script>');await p.listeners.get('release-button:click')();assert.ok(p.calls.some(([cmd,args])=>cmd==='open_release'&&args.tag==='v0.3.3'));await p.listeners.get('close-update:click')();assert.ok(p.calls.some(([cmd])=>cmd==='close_update'));assert.ok(!p.calls.some(([cmd])=>cmd==='refresh_quota'));});
 test('failed check offers retry in the primary control',async()=>{const p=await page({session:3,checking:false,theme:'glass',currentVersion:'0.3.2',error:'网络连接失败'});assert.equal(p.elements.get('update-title').textContent,'暂时无法检查更新');assert.equal(p.elements.get('update-notes').textContent,'网络连接失败');assert.equal(p.elements.get('install-button').textContent,'重新检查');await p.listeners.get('install-button:click')();assert.ok(p.calls.some(([cmd])=>cmd==='retry_update'));});
 
 test('markdown notes use readable short bullets',async()=>{const p=await page({session:4,checking:false,theme:'glass',currentVersion:'0.3.2',release:{available:true,version:'0.3.3',tag:'v0.3.3',notes:'# 标题\n\n- **优化布局**\n- 修复定位\n\n[下载](https://example.test)'}});assert.equal(p.elements.get('update-notes').textContent,'优化布局\n修复定位');});
+test('app selects Chinese notes after the English release sections',async()=>{
+ const p=await page({release:{notes:'# Changes\n- English change\n- English download\n\n## 中文更新说明\n- **修复缩放**\n- 优化居中\n\n## Download\n- Installer'}});
+ assert.equal(p.elements.get('update-notes').textContent,'修复缩放\n优化居中');
+});
+test('English GitHub body can carry hidden Chinese app notes',async()=>{
+ const p=await page({release:{notes:'# Changes\n- Fix scaling\n\n<!-- codex-badge-notes-zh\n- 修复胶囊显示\n- 修复详情裁切\n-->\n\n## Download\n- Installer'}});
+ assert.equal(p.elements.get('update-notes').textContent,'修复胶囊显示\n修复详情裁切');
+});
+test('missing Chinese notes use a Chinese fallback',async()=>{
+ const p=await page({release:{notes:'# Changes\n- Fix scaling'}});
+ assert.equal(p.elements.get('update-notes').textContent,'此版本暂未提供中文更新说明，请查看发布页。');
+});
 test('one click is enabled only for a newer installed release',async()=>{
  for(const [available,installed,label,disabled] of [[true,true,'一键更新',false],[false,true,'已是最新版本',true],[true,false,'一键更新',true]]){
   const p=await page({session:5,checking:false,installed,theme:'glass',currentVersion:'0.3.2',release:{available,version:'0.3.3',tag:'v0.3.3'}});
