@@ -392,7 +392,15 @@ pub fn run(shared: Arc<Shared>, app: AppHandle) {
                         let _ = app.emit("state-updated", ());
                         crate::deliver_reminder(&shared, &app);
                         failures = 0;
-                        next_read = Instant::now() + Duration::from_secs(60);
+                        let confirmation_delay = shared
+                            .inner
+                            .lock()
+                            .unwrap()
+                            .settings
+                            .celebration_state
+                            .confirmation_delay(account_key, now());
+                        next_read =
+                            Instant::now() + Duration::from_secs(confirmation_delay.unwrap_or(60));
                         if server.pending_update {
                             server.pending_update = false;
                             next_read = Instant::now() + Duration::from_secs(1);

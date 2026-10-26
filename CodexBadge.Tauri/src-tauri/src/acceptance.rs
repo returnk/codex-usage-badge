@@ -1,10 +1,15 @@
-//! Isolated desktop acceptance harness: no production mutex, tray, settings writes,
+//! Isolated desktop acceptance harness: no production mutex, tray, production settings writes,
 //! account mutations or host tracking. The actual create_window/render/input path is reused.
 use super::*;
 
 #[test]
 #[ignore = "interactive desktop preview with isolated WebView profile"]
 fn desktop_preview() {
+    // Theme selection and playback acknowledgement write only into this sandbox.
+    let preview_data = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../artifacts/desktop-preview-data");
+    std::env::set_var("LOCALAPPDATA", &preview_data);
+    diagnostics::init();
     let profile = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../artifacts/desktop-preview-profile");
     let mut context = tauri::generate_context!();
@@ -15,6 +20,9 @@ fn desktop_preview() {
     {
         let mut m = shared.inner.lock().unwrap();
         m.settings.always_on_top = true;
+        if let Ok(theme) = std::env::var("BADGE_PREVIEW_THEME") {
+            m.settings.theme = serde_json::from_value(json!(theme)).expect("preview theme");
+        }
         m.settings.celebration_state = celebration::CelebrationState::existing_install();
         m.quota_mode = "weekly".into();
         m.plan_label = Some("PRO".into());
@@ -23,6 +31,11 @@ fn desktop_preview() {
             &json!({"rateLimits":{"primary":{"usedPercent":31,"windowDurationMins":10080,"resetsAt":epoch_now()+86400}},"rateLimitResetCredits":{"availableCount":1,"credits":[{"id":"simulation","status":"available","expiresAt":epoch_now()+86400*4}]}}),
             epoch_now(),
         ));
+        if std::env::var("BADGE_PREVIEW_RESET").as_deref() == Ok("1") {
+            m.account_key = Some(1);
+            let before = m.snapshot.clone().unwrap();
+            m.settings.celebration_state.observe(&before, Some(1));
+        }
     }
     if std::env::var("BADGE_PREVIEW_LIVE_ACCOUNT").as_deref() == Ok("1") {
         let (plan, snapshot) = quota::live_readonly_sample().expect("read-only live quota");
@@ -37,8 +50,29 @@ fn desktop_preview() {
         .setup(move |app| {
             app.manage(setup_shared.clone());
             app.manage(update_window::Controller::default());
+            // A normal owner window makes nonactivating tool windows visible to
+            // desktop inspection tools and supplies a reproducible blur target.
+            let background = r#"<!doctype html><meta charset="utf-8"><style>
+                html{height:100%;background:linear-gradient(120deg,#c5e9ff,#b8c9f3 45%,#eec5cd 75%,#f5d5ab)}
+                body{margin:0;height:100%;font:14px Segoe UI;color:#29445f;background:repeating-linear-gradient(90deg,transparent 0 18px,#ffffff60 18px 20px)}
+                </style><div style="position:absolute;bottom:24px;left:30px">重置烟花 · 原生窗口预览<br><small>模拟额度 · 原有主题 · 独立数据目录</small></div>"#;
+            let background = if std::env::var("BADGE_PREVIEW_BACKGROUND").as_deref() == Ok("dark") {
+                background.replace("#c5e9ff,#b8c9f3 45%,#eec5cd 75%,#f5d5ab", "#05080e,#13233e 45%,#332039 75%,#090d14")
+                    .replace("color:#29445f", "color:#e4edf9")
+            } else { background.to_string() };
+            let backdrop = tauri::WebviewWindowBuilder::new(app, "preview-backdrop",
+                tauri::WebviewUrl::External("about:blank".parse().unwrap()))
+                .title("Codex Badge Reset Preview")
+                .inner_size(620.0, 380.0).position(540.0, 300.0)
+                .always_on_top(true)
+                .build()?;
+            backdrop.eval(format!("document.documentElement.innerHTML={}", serde_json::to_string(&background).unwrap()))?;
+            let preview_owner = backdrop.hwnd()?.0 as isize;
+            native::move_only(preview_owner, 540, 300);
             for label in ["capsule", "detail", "credit"] {
                 create_window(app.handle(), &setup_shared, label).map_err(std::io::Error::other)?;
+                let window = app.get_webview_window(label).unwrap();
+                native::bind_owner(window.hwnd()?.0 as isize, preview_owner);
             }
             let preview_menu = if std::env::var("BADGE_PREVIEW_MENU").as_deref() == Ok("1") {
                 Some(
@@ -95,6 +129,30 @@ fn desktop_preview() {
                             println!("update_preview tick={tick} session={} shown={} visible={} checking={} known={:?}",u.session,u.shown_session,u.visible,u.checking,u.known_version);
                         }
                         let mut m = s.inner.lock().unwrap();
+                        if std::env::var("BADGE_PREVIEW_RESET").as_deref() == Ok("1") && [75, 90, 150, 165, 180].contains(&tick) {
+                            let mut snapshot = m.snapshot.clone().unwrap();
+                            snapshot.fetched_at = epoch_now();
+                            snapshot.weekly.as_mut().unwrap().remaining = if tick == 150 { 69.0 } else { 100.0 };
+                            m.settings.celebration_state.observe(&snapshot, Some(1));
+                            m.snapshot = Some(snapshot);
+                            println!("preview_reset tick={tick} pending={}", m.settings.celebration_state.peek(Some(1), epoch_now()).is_some());
+                            let _ = a.emit("state-updated", ());
+                        }
+                        if std::env::var("BADGE_PREVIEW_HOVER").as_deref() == Ok("1") {
+                            if tick == 0 {
+                                m.settings.global_position = native::global_position((600, 390));
+                            }
+                            let previous = (m.detail_visible, m.detail_session);
+                            layout(&mut m, &a);
+                            if previous != (m.detail_visible, m.detail_session) {
+                                println!("preview_hover tick={tick} visible={} session={}", m.detail_visible, m.detail_session);
+                                let _ = a.emit("state-updated", ());
+                            }
+                            if s.quota_refresh.swap(false, Ordering::AcqRel) {
+                                println!("preview_hover_refresh tick={tick}");
+                            }
+                            return;
+                        }
                         let dpi = native::dpi(m.windows[1]);
                         let p = |v| domain::dip_to_px(v, dpi);
                         let area = native::monitor_at((600, 450)).unwrap().area;
@@ -161,7 +219,9 @@ fn desktop_preview() {
             window_ready,
             report_detail_height,
             report_capsule_layout,
+            sync_webview_scale,
             set_input_regions,
+            cycle_theme,
             toggle_credit,
             update_window::get_update_state,
             update_window::update_ready,
@@ -171,7 +231,10 @@ fn desktop_preview() {
             update_window::move_update_drag,
             update_window::end_update_drag,
             updates::open_release,
-            celebration_window::request_celebration
+            celebration_window::request_celebration,
+            celebration_window::celebration_ready,
+            celebration_window::celebration_started,
+            celebration_window::celebration_failed
         ])
         .build(context)
         .expect("isolated preview builds");

@@ -66,6 +66,7 @@ body.view-capsule .capsule { font-size:40vw; }
 .capsule .percentage { display: flex; align-items: baseline; line-height: 1; }
 #capsule-unit, .capsule-unit { font-size: .52em; font-weight: 400; margin-left: 1px; }
 #percent { display: block; text-align: center; }
+.capsule[data-freshness="stale"] #percent { text-decoration: underline dotted; text-decoration-thickness: 1px; text-underline-offset: 2px; }
 :root[data-topmost="true"] .capsule, .preview-global .capsule { font-size: 16px; }
 .hint-dot { position: absolute; top: 3px; right: 3px; width: 4px; height: 4px; border-radius: 50%; pointer-events: none; }
 :root[data-topmost="true"] .hint-dot, .preview-global .hint-dot { top: 6px; right: 6px; }

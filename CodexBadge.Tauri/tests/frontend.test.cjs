@@ -208,6 +208,27 @@ test('cached quotas visibly identify a failed refresh', async () => {
   assert.match(p.elements.get('five-reset').textContent, /数据待更新/);
 });
 
+test('stale capsule marks cached numbers without changing credit hints and clears on recovery', async () => {
+  for (const topmost of [false,true]) {
+    const p=await page('capsule',{topmost,freshness:'stale',capsule:'88%',hintLevel:'urgent',hintMessages:['重置卡即将过期']});
+    const capsule=p.elements.get('.capsule');
+    assert.equal(capsule.dataset.freshness,'stale');
+    assert.match(capsule.attributes['aria-label'],/数据待更新/);
+    assert.match(capsule.attributes['aria-label'],/重置卡即将过期/);
+    assert.equal(p.elements.get('hint-dot').dataset.level,'urgent');
+    assert.equal(p.elements.get('percent').textContent,'88');
+    p.state.freshness='fresh';
+    await p.listeners.get('tauri:state-updated')();
+    assert.equal(capsule.dataset.freshness,'fresh');
+    assert.doesNotMatch(capsule.attributes['aria-label'],/数据待更新/);
+    p.state.freshness='unavailable';p.state.capsule='--';
+    await p.listeners.get('tauri:state-updated')();
+    assert.equal(p.elements.get('percent').textContent,'--');
+    assert.match(capsule.attributes['aria-label'],/暂时无法读取额度/);
+    assert.ok(!p.calls.some(([command])=>command==='refresh_quota'));
+  }
+});
+
 test('system appearance reacts to OS changes without replacing the number', async () => {
   const p = await page('capsule', { theme: 'system', capsule: '38%' });
   assert.equal(p.document.documentElement.dataset.theme, 'light');

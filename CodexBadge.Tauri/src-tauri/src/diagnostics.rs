@@ -130,6 +130,7 @@ fn sanitize_event(event: &str) -> String {
                 | "renderer"
                 | "consumed_live_credit"
                 | "early_weekly_recovery"
+                | "early_quota_recovery"
                 | "capsule"
                 | "detail"
                 | "credit"

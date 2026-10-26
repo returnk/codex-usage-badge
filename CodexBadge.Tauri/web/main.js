@@ -146,9 +146,11 @@ async function renderState() {
     document.getElementById('percent').textContent = state.capsule.replace(/%$/, '');
     document.getElementById('capsule-unit').hidden = !topmost || !/%$/.test(state.capsule);
     app.querySelector('.capsule').dataset.band=state.progressBand || 'unknown';
+    app.querySelector('.capsule').dataset.freshness=state.freshness;
+    const quotaStatus=state.freshness==='stale'?'显示上次读取的额度，数据待更新':state.freshness==='unavailable'?'暂时无法读取额度':'';
     const hintLevel = ['notice', 'urgent'].includes(state.hintLevel) ? state.hintLevel : 'none';
     document.getElementById('hint-dot').dataset.level = hintLevel;
-    app.querySelector('.capsule').setAttribute('aria-label', [`${state.quotaMode === 'weekly' ? '本周' : state.quotaMode === 'five-hour' ? '五小时' : ''}剩余额度 ${state.capsule}`, ...(state.hintMessages || [])].join('，'));
+    app.querySelector('.capsule').setAttribute('aria-label', [`${state.quotaMode === 'weekly' ? '本周' : state.quotaMode === 'five-hour' ? '五小时' : ''}剩余额度 ${state.capsule}`, quotaStatus, ...(state.hintMessages || [])].filter(Boolean).join('，'));
   } else if (view === 'detail') {
     app.querySelector('.detail-card').dataset.constrained=String(!!state.detailConstrained);
     renderedCreditHint = state.creditHint || null;

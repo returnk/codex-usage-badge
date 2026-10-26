@@ -1,6 +1,6 @@
 const invoke=(command,args={})=>window.__TAURI__.core.invoke(command,args);
 const el=id=>document.getElementById(id);
-let releaseTag=null, rendering=false,again=false,latestState=null;
+let releaseTag=null, rendering=false,again=false,latestState=null,commandError=null;
 const systemTheme=window.matchMedia('(prefers-color-scheme: dark)');
 let theme='glass';
 function applyTheme(){document.documentElement.dataset.theme=theme==='system'?(systemTheme.matches?'dark':'light'):theme;}
@@ -21,16 +21,18 @@ function notes(lines,message=false){
  list.replaceChildren(...lines.map(text=>{const item=document.createElement('li');item.textContent=text;return item;}));
 }
 async function render(){again=true;if(rendering)return;rendering=true;try{do{again=false;const state=await invoke('get_update_state');latestState=state;theme=state.theme;applyTheme();const release=state.release;releaseTag=release?.tag||null;
+ if(commandError?.session!==state.session)commandError=null;
+ const error=commandError?.message||state.error;
  el('current-version').textContent=state.currentVersion;
  el('latest-version').textContent=release?.version||'—';
- el('update-title').textContent=state.installing?'正在更新…':state.error?(state.stage==='failed'?'更新未完成':'暂时无法检查更新'):state.checking?'正在检查更新…':release?.available?'发现新版本':'当前无需更新';
- el('notes-title').textContent=state.error?'更新结果':'更新说明';
- notes(state.checking?['正在获取发布信息，请稍候。']:state.error?[state.error]:noteSummary(release?.notes),state.checking||!!state.error);
- if(!state.error&&(state.installing||(release?.available&&!state.installed)))el('update-notes').className='status';
+ el('update-title').textContent=state.installing?'正在更新…':error?(state.stage==='failed'||release?.available?'更新未完成':'暂时无法检查更新'):state.checking?'正在检查更新…':release?.available?'发现新版本':'当前无需更新';
+ el('notes-title').textContent=error?'更新结果':'更新说明';
+ notes(state.checking?['正在获取发布信息，请稍候。']:error?[error]:noteSummary(release?.notes),state.checking||!!error);
+ if(!error&&(state.installing||(release?.available&&!state.installed)))el('update-notes').className='status';
  el('release-button').disabled=state.checking||!releaseTag;
  const primary=el('install-button');
- primary.textContent=state.installing?(state.stage==='preparing'?'正在准备…':state.stage==='installing'?'正在安装…':'正在下载…'):state.checking?'正在检查…':state.stage==='failed'?'重试更新':state.error?'重新检查':release?.available?'一键更新':'已是最新版本';
- primary.disabled=!!state.checking||!!state.installing||(!state.error&&!release?.available)||(!!release?.available&&!state.installed);
+ primary.textContent=state.installing?(state.stage==='preparing'?'正在准备…':state.stage==='installing'?'正在安装…':'正在下载…'):state.checking?'正在检查…':state.stage==='failed'||(error&&release?.available)?'重试更新':error?'重新检查':release?.available?'一键更新':'已是最新版本';
+ primary.disabled=!!state.checking||!!state.installing||(!error&&!release?.available)||(!!release?.available&&!state.installed);
  primary.title=release?.available&&!state.installed?'绿色版或未确认安装位置，请通过发布页下载新版。':'下载并验证后升级，完成后重新启动。';
  const status=el('download-status');status.hidden=!state.installing&&!(release?.available&&!state.installed);
  status.textContent=!state.installed?'绿色版／未确认安装位置，请通过发布页更新。':state.stage==='preparing'?'正在获取签名更新包…':state.stage==='installing'?'验证完成，即将退出升级并重新启动。':state.total>0?`已下载 ${Math.min(100,Math.floor(state.downloaded/state.total*100))}%`:`已下载 ${((state.downloaded||0)/1048576).toFixed(1)} MB`;
@@ -42,9 +44,11 @@ el('release-button').addEventListener('click',async()=>{if(releaseTag){try{await
 el('install-button').addEventListener('click',async()=>{
  if(el('install-button').disabled)return;
  el('install-button').disabled=true;
+ const session=latestState?.session;
+ commandError=null;
  try{await invoke(latestState?.release?.available?'install_update':'retry_update');}
- catch(error){notes([String(error)],true);}
- finally{render();}
+ catch(error){commandError={session,message:String(error)};}
+ finally{await render();}
 });
 let headerDrag=null;
 async function flushDrag(drag){

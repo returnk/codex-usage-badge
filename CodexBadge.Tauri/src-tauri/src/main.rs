@@ -1446,17 +1446,16 @@ fn state_value(m: &mut Model) -> Value {
 }
 
 fn request_missing_refresh(m: &mut Model, at: Instant) -> bool {
-    let available = domain::quota_freshness(
-        m.snapshot.as_ref().map(|s| s.fetched_at),
-        m.quota_failed,
-        epoch_now(),
-    ) != "unavailable"
+    let recent = !m.quota_failed
+        && m.snapshot
+            .as_ref()
+            .is_some_and(|s| (0..15).contains(&epoch_now().saturating_sub(s.fetched_at)))
         && m.snapshot
             .as_ref()
             .is_some_and(|s| s.five_hour.is_some() || s.weekly.is_some());
-    if available
+    if recent
         || m.last_missing_refresh
-            .is_some_and(|last| at.saturating_duration_since(last) < Duration::from_secs(30))
+            .is_some_and(|last| at.saturating_duration_since(last) < Duration::from_secs(15))
     {
         return false;
     }
@@ -2076,6 +2075,28 @@ fn main() {
 mod stability_tests {
     use super::*;
     #[test]
+    fn hover_refreshes_old_or_failed_readings_but_not_recent_success() {
+        let at = Instant::now();
+        for (age, failed, expected) in [
+            (0, false, false),
+            (14, false, false),
+            (16, false, true),
+            (0, true, true),
+        ] {
+            let mut m = Model::default();
+            m.snapshot = Some(domain::parse_quota(
+                &json!({"rateLimits":{"primary":{"usedPercent":10,"windowDurationMins":10080,"resetsAt":epoch_now()+3600}}}),
+                epoch_now() - age,
+            ));
+            m.quota_failed = failed;
+            assert_eq!(
+                request_missing_refresh(&mut m, at),
+                expected,
+                "age={age} failed={failed}"
+            );
+        }
+    }
+    #[test]
     fn readable_quota_hover_does_not_request_refresh() {
         for minutes in [300, 10080] {
             let mut m = Model::default();
@@ -2096,11 +2117,11 @@ mod stability_tests {
         assert!(request_missing_refresh(&mut m, at));
         assert!(!request_missing_refresh(
             &mut m,
-            at + Duration::from_secs(29)
+            at + Duration::from_secs(14)
         ));
         assert!(request_missing_refresh(
             &mut m,
-            at + Duration::from_secs(30)
+            at + Duration::from_secs(15)
         ));
         assert_eq!(m.quota_status, status);
     }

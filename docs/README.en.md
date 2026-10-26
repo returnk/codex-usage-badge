@@ -16,9 +16,9 @@ Keep your remaining quota in view without leaving your work. The badge sits alon
 
 ## Download
 
-**v0.3.3** · Windows 10 / 11 x64 · Release
+**v0.3.4** · Windows 10 / 11 x64 · Release
 
-[**Installer (recommended)**](https://github.com/returnk/codex-usage-badge/releases/download/v0.3.3/Codex.Badge_0.3.3_x64-setup.exe) · [Portable ZIP](https://github.com/returnk/codex-usage-badge/releases/download/v0.3.3/CodexBadge-v0.3.3-windows-x64-portable.zip) · [Release notes](https://github.com/returnk/codex-usage-badge/releases/tag/v0.3.3) · [SHA-256](https://github.com/returnk/codex-usage-badge/releases/download/v0.3.3/SHA256SUMS.txt)
+[**Installer (recommended)**](https://github.com/returnk/codex-usage-badge/releases/download/v0.3.4/Codex.Badge_0.3.4_x64-setup.exe) · [Portable ZIP](https://github.com/returnk/codex-usage-badge/releases/download/v0.3.4/CodexBadge-v0.3.4-windows-x64-portable.zip) · [Release notes](https://github.com/returnk/codex-usage-badge/releases/tag/v0.3.4) · [SHA-256](https://github.com/returnk/codex-usage-badge/releases/download/v0.3.4/SHA256SUMS.txt)
 
 Requires WebView2 Runtime, the signed-in Codex Windows desktop app, and a working Codex CLI. The installer can download WebView2 if needed. No .NET runtime required. The app is unsigned; Windows may show a security warning. Download only from this repository.
 
@@ -49,7 +49,7 @@ Normal mode hides when Codex is minimized. Always-on-top mode remains visible wh
 - **`--%`?** Check your Codex sign-in and CLI. If the CLI cannot be found, set `CODEX_BADGE_CLI` to the full path of `codex.exe`.
 - **Updating or moving the portable app?** Disable launch at login, exit the running copy, then launch the new copy and re-enable it if needed. When upgrading from v0.2.x, configure your theme and position again.
 
-This update protects the badge anchor during image viewing, aligns DPI and avatar sizing, fixes popup clipping, and persists early-recovery fireworks across restarts. Automated checks and earlier isolated 125% desktop checks do not establish multi-PC, mixed-DPI, or full install/upgrade acceptance. See the [release notes](../CodexBadge.Tauri/docs/releases/v0.3.3.md).
+This update improves hover-triggered quota synchronization, marks cached readings, preserves update errors, and narrows uninstall cleanup. Automated checks and user testing do not establish multi-PC, mixed-DPI, or full install/upgrade acceptance. See the [release notes](../CodexBadge.Tauri/docs/releases/v0.3.4.md).
 
 ## Privacy and feedback
 
@@ -61,8 +61,8 @@ Reads quota through the local `codex app-server`. It does not read `auth.json`, 
 
 <sub>Independent open-source tool. Not an official OpenAI product.</sub>
 
-## v0.3.3 updates
+## v0.3.4 updates
 
-Early quota-recovery evidence and pending fireworks are saved per account; playback is consumed only after the renderer starts and the acknowledgement is saved. Natural scheduled resets do not celebrate. The first valid reading after upgrading establishes history. Quota mode follows the API: prefer the five-hour window when present, otherwise show the weekly window. Settings > Check for updates opens a themed, draggable update panel. Installed copies support a user-initiated signed update; portable copies use the release page and manual ZIP replacement. No automatic checks, downloads, or installation. Updater signatures are separate from Windows Authenticode signing. The interface remains Chinese. This is an independent community tool, not an official OpenAI product.
+Opening the hover panel can refresh older quota data, with throttling to avoid repeated requests. Cached numbers have a subtle pending-update indicator. Update-action errors remain visible across redraws. Uninstall cleanup removes only startup entries belonging to the current installation and this Tauri app's data; upgrades retain settings. Glass and System remain the two theme choices. Installed copies support a user-initiated signed update; portable copies use the release page and manual ZIP replacement. No automatic checks, downloads, or installation. Updater signatures are separate from Windows Authenticode signing. The interface remains Chinese. This is an independent community tool, not an official OpenAI product.
 
 If Codex Badge helps your workflow, a Star is appreciated.

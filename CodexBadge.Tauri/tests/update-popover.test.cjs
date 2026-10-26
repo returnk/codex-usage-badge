@@ -7,6 +7,44 @@ test('loading update popover retains fixed slots and disables release action',as
 test('release notes are text and closing never changes quota state',async()=>{const p=await page({session:2,checking:false,theme:'system',currentVersion:'0.3.2',release:{available:true,version:'0.3.3',tag:'v0.3.3',notes:'<script>修复()</script>'}});assert.equal(p.elements.get('update-title').textContent,'发现新版本');assert.equal(p.elements.get('update-notes').textContent,'<script>修复()</script>');await p.listeners.get('release-button:click')();assert.ok(p.calls.some(([cmd,args])=>cmd==='open_release'&&args.tag==='v0.3.3'));await p.listeners.get('close-update:click')();assert.ok(p.calls.some(([cmd])=>cmd==='close_update'));assert.ok(!p.calls.some(([cmd])=>cmd==='refresh_quota'));});
 test('failed check offers retry in the primary control',async()=>{const p=await page({session:3,checking:false,theme:'glass',currentVersion:'0.3.2',error:'网络连接失败'});assert.equal(p.elements.get('update-title').textContent,'暂时无法检查更新');assert.equal(p.elements.get('update-notes').textContent,'网络连接失败');assert.equal(p.elements.get('install-button').textContent,'重新检查');await p.listeners.get('install-button:click')();assert.ok(p.calls.some(([cmd])=>cmd==='retry_update'));});
 
+test('direct install rejection survives redraw and clears after an accepted retry',async()=>{
+ const state={session:11,checking:false,installed:true,theme:'glass',currentVersion:'0.3.3',release:{available:true,version:'0.3.4',tag:'v0.3.4',notes:'- 修复显示'}};
+ let attempts=0;
+ const p=await page(state,async cmd=>{
+  if(cmd==='get_update_state')return state;
+  if(cmd==='install_update'){
+   if(++attempts===1)throw '安装位置校验失败';
+   state.installing=true;state.stage='preparing';
+  }
+  return true;
+ });
+ await p.listeners.get('install-button:click')();
+ await new Promise(resolve=>setImmediate(resolve));
+ await p.listeners.get('state-updated')();
+ assert.equal(p.elements.get('update-notes').textContent,'安装位置校验失败');
+ assert.equal(p.elements.get('install-button').disabled,false);
+ assert.equal(p.elements.get('install-button').textContent,'重试更新');
+ await p.listeners.get('install-button:click')();
+ await new Promise(resolve=>setImmediate(resolve));
+ assert.equal(p.elements.get('install-button').disabled,true);
+ assert.doesNotMatch(p.elements.get('update-notes').textContent,/安装位置校验失败/);
+});
+test('reopening the update window clears its previous command error',async()=>{
+ const state={session:12,checking:false,theme:'glass',currentVersion:'0.3.3',error:'旧的检查失败'};
+ const p=await page(state,async cmd=>{
+  if(cmd==='get_update_state')return state;
+  if(cmd==='retry_update')throw '窗口命令失败';
+  return true;
+ });
+ await p.listeners.get('install-button:click')();
+ await new Promise(resolve=>setImmediate(resolve));
+ assert.equal(p.elements.get('update-notes').textContent,'窗口命令失败');
+ state.session++;state.error=null;state.checking=true;
+ await p.listeners.get('update-state')();
+ assert.equal(p.elements.get('update-title').textContent,'正在检查更新…');
+ assert.doesNotMatch(p.elements.get('update-notes').textContent,/窗口命令失败/);
+});
+
 test('markdown notes use readable short bullets',async()=>{const p=await page({session:4,checking:false,theme:'glass',currentVersion:'0.3.2',release:{available:true,version:'0.3.3',tag:'v0.3.3',notes:'# 标题\n\n- **优化布局**\n- 修复定位\n\n[下载](https://example.test)'}});assert.equal(p.elements.get('update-notes').textContent,'优化布局\n修复定位');});
 test('app selects Chinese notes after the English release sections',async()=>{
  const p=await page({release:{notes:'# Changes\n- English change\n- English download\n\n## 中文更新说明\n- **修复缩放**\n- 优化居中\n\n## Download\n- Installer'}});

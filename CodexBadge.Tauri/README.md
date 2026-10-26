@@ -1,13 +1,13 @@
 # 余量 · Codex Badge — Tauri development
 
-当前产品实现：**Tauri 2 + Rust + 系统 WebView2**。当前公开版本为 **v0.3.3**。下载与日常使用见[项目首页](../README.md)；本页面向开发者，记录构建、诊断与验证信息。
+当前产品实现：**Tauri 2 + Rust + 系统 WebView2**。当前公开版本为 **v0.3.4**。下载与日常使用见[项目首页](../README.md)；本页面向开发者，记录构建、诊断与验证信息。
 
 Tauri 2 + Rust + system WebView2 implementation for Windows 10/11 x64. This directory is independent of the WPF source in `src/CodexBadge`.
 
 ## Data and behavior
 
 - When Codex is running, starts `codex app-server --stdio`, initializes the protocol, checks `account/read` with `refreshToken:false`, reads `account/rateLimits/read` immediately and every 60 seconds, and refreshes after quota/account notifications. The manual refresh action has been removed; automatic refresh and failure backoff remain.
-- Uses only the app-server response. It does not read `auth.json` or use the wham endpoint. Failed reads retry after 15, 30, 60, then 300 seconds. Cached data older than 30 minutes is unavailable.
+- Uses only the app-server response. It does not read `auth.json` or use the wham endpoint. Failed reads retry after 15, 30, 60, then 300 seconds. Opening details requests a refresh when the last read failed or is at least 15 seconds old; repeated openings are throttled. Cached data older than 30 minutes is unavailable.
 - Maps `usedPercent` to remaining percent for 300-minute and 10080-minute windows. The reset count uses `availableCount`, including when expiry details are absent. Unknown count is shown as unknown, not zero; View is hidden without real unexpired details. Known details must be `available` and unexpired and are sorted by expiration. Expiry of a known row reduces the cached count until the next read. Failed refreshes visibly mark cached data as pending update.
 - Defaults to Glass, with a System theme that follows Windows light/dark appearance. The wheel switches themes. Normal mode uses a compact numeric circle; global mode uses a capsule with a small percent unit. Both modes support drag and double-click position reset.
 - Saves theme, normal anchor-relative DIP offset, independent global work-area position, startup preference, notifications and reminder deduplication state in `%LOCALAPPDATA%\CodexBadge\tauri-settings.json`. Capsule and tray share a native three-item menu: topmost, Settings submenu, and Exit. Settings contains launch at login and optional Windows notifications. Native menus and hints use premultiplied-alpha buffered rendering with UpdateLayeredWindow; no WebView cold creation is needed for tray menus.
@@ -20,7 +20,7 @@ Install Rust MSVC, Visual Studio C++ Build Tools, Node.js, and system WebView2. 
 
 ```powershell
 npm ci
-node --test tests/frontend.test.cjs
+node --test tests/*.test.cjs
 cargo fmt --check --manifest-path src-tauri/Cargo.toml
 cargo check --manifest-path src-tauri/Cargo.toml
 cargo test --manifest-path src-tauri/Cargo.toml
@@ -41,9 +41,9 @@ After a missing tray menu or a failed topmost switch, note the approximate clock
 
 For a new failure, record the time, display scaling, Glass/System choice, whether topmost is enabled, and the shortest steps to reproduce. The nearby log entries identify quota RPC stages, native mode requests, menu visibility and drag coordinates. Historic quota failures cannot be assigned a cause when their original errors were discarded.
 
-## v0.3.3 recovery events
+## Local cached data
 
-Recent valid quota evidence is saved per account for up to seven days. Pending early-recovery effects expire after 24 hours; a renderer-start acknowledgement is saved before consuming an event. Natural scheduled resets and first readings without history do not celebrate. The new history cannot reconstruct quota readings from older releases. Recovery records contain local opaque account fingerprints, quota/window values and reset-credit evidence; no credentials or account plaintext are stored there.
+Local cached records can include opaque account fingerprints, quota/window values and reset-credit details. No credentials or account plaintext are stored in these records. Settings and diagnostics remain in the local CodexBadge data directory.
 
 ## Desktop acceptance
 

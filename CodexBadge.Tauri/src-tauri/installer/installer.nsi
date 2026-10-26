@@ -865,12 +865,13 @@ Section Uninstall
     DeleteRegKey HKCU "${UNINSTKEY}"
   !endif
 
-  ; Removes the Autostart entry for ${PRODUCTNAME} from the HKCU Run key if it exists.
-  ; This ensures the program does not launch automatically after uninstallation if it exists.
-  ; If it doesn't exist, it does nothing.
-  ; We do this when not updating (to preserve the registry value on updates)
+  ; Removes the Autostart entry only when it points to this installation.
+  ; Preserve startup for portable copies and normal upgrades.
   ${If} $UpdateMode <> 1
-    DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "${PRODUCTNAME}"
+    ReadRegStr $R0 HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "CodexBadgeTauri"
+    ${If} $R0 == "$\"$INSTDIR\${MAINBINARYNAME}.exe$\""
+      DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "CodexBadgeTauri"
+    ${EndIf}
   ${EndIf}
 
   ; Delete app data if the checkbox is selected
@@ -889,6 +890,13 @@ Section Uninstall
     SetShellVarContext current
     RmDir /r "$APPDATA\${BUNDLEID}"
     RmDir /r "$LOCALAPPDATA\${BUNDLEID}"
+    ; CodexBadge is shared with the older WPF app; remove only Tauri-owned files.
+    Delete "$LOCALAPPDATA\CodexBadge\tauri-settings.json"
+    Delete "$LOCALAPPDATA\CodexBadge\tauri-settings.json.tmp"
+    Delete "$LOCALAPPDATA\CodexBadge\tauri-update-notice.json"
+    Delete "$LOCALAPPDATA\CodexBadge\tauri-update-notice.json.tmp"
+    Delete "$LOCALAPPDATA\CodexBadge\tauri-diagnostics.log"
+    Delete "$LOCALAPPDATA\CodexBadge\tauri-diagnostics.log.old"
   ${EndIf}
 
   !ifmacrodef NSIS_HOOK_POSTUNINSTALL

@@ -31,11 +31,13 @@ test('welcome uses capsule circle and star shapes and stops at 2.5 seconds',()=>
   assert.equal(r.calls[0].particleCount,34);
   r.advance(2500);assert.equal(r.resets,1);assert.equal(r.clears,1);assert.equal(r.timers.size,0);
 });
-test('reset has two bounded random bursts at the native panel origin and clears',()=>{
+test('reset spreads bounded bursts across three seconds and clears after their five second lifetime',()=>{
   const r=renderer(), origin={x:0.18,y:0.81};r.api.play(r.canvas,'reset',origin);
-  assert.equal(r.calls.length,1);r.advance(400);assert.equal(r.calls.length,2);
+  assert.equal(r.calls.length,1);r.advance(1100);assert.equal(r.calls.length,3);
   for(const call of r.calls){assert.equal(call.origin,origin);assert.ok(call.particleCount>=22 && call.particleCount<=36);assert.ok(call.angle>=50 && call.angle<130);}
-  r.advance(2500);assert.equal(r.resets,1);assert.equal(r.timers.size,0);
+  r.advance(2900);assert.equal(r.calls.length,6);assert.equal(r.resets,0);
+  r.advance(4999);assert.equal(r.resets,0);
+  r.advance(5000);assert.equal(r.resets,1);assert.equal(r.timers.size,0);
 });
 test('cancel and replacement stop old bursts and reduced motion produces no particles',()=>{
   const r=renderer();r.api.play(r.canvas,'reset');r.api.cancel();r.advance(2500);assert.equal(r.calls.length,1);
@@ -43,19 +45,38 @@ test('cancel and replacement stop old bursts and reduced motion produces no part
   const quiet=renderer(true);quiet.api.play(quiet.canvas,'reset');assert.equal(quiet.calls.length,0);assert.equal(quiet.timers.size,0);
 });
 
-async function overlay({rendererFails=false,saveFails=false}={}) {
-  const calls=[],frames=[];
+async function overlay({rendererFails=false,saveFails=false,reenterBeforeFrame=false}={}) {
+  const calls=[],frames=[],listeners=new Map();
   const effect={kind:'reset',playId:12,origin:{x:.5,y:.6}};
   const window={BadgeCelebration:{play(){calls.push('play');if(rendererFails)throw new Error('renderer failed');},cancel(){calls.push('cancel');}},__TAURI__:{
     core:{async invoke(cmd,args){calls.push([cmd,args]);if(cmd==='celebration_ready')return effect;if(cmd==='celebration_started'){if(saveFails)throw new Error('save failed');return true;}}},
-    event:{listen:async()=>{}}
+    event:{listen:async(name,callback)=>{listeners.set(name,callback);}}
   }};
   vm.runInNewContext(fs.readFileSync(`${__dirname}/../web/celebration-overlay.js`,'utf8'),{
     window,document:{getElementById:()=>({})},requestAnimationFrame:fn=>frames.push(fn),setTimeout:()=>{},console:{error(){}}
   });
-  async function settle(){for(let i=0;i<8;i++){await new Promise(resolve=>setImmediate(resolve));while(frames.length)frames.shift()();}}
-  await settle();return calls;
+  let reentered=false;
+  async function settle(){for(let i=0;i<8;i++){
+    await new Promise(resolve=>setImmediate(resolve));
+    if(reenterBeforeFrame && !reentered && calls.includes('play')) {
+      reentered=true;listeners.get('celebration-cancel')();listeners.get('celebration-request')();
+    }
+    while(frames.length)frames.shift()();
+  }}
+  await settle();calls.listeners=listeners;return calls;
 }
+test('closing the native detail cancels the renderer immediately',async()=>{
+  const calls=await overlay();
+  assert.equal(typeof calls.listeners.get('celebration-cancel'),'function');
+  calls.listeners.get('celebration-cancel')();
+  assert.equal(calls.at(-1),'cancel');
+});
+test('reentering during the old first frame retains one new playback request',async()=>{
+  const calls=await overlay({reenterBeforeFrame:true});
+  assert.equal(calls.filter(c=>c[0]==='celebration_ready').length,2);
+  assert.equal(calls.filter(c=>c==='play').length,2);
+  assert.equal(calls.filter(c=>c[0]==='celebration_started').length,1);
+});
 test('overlay acknowledges the exact playback only after the renderer starts',async()=>{
   const calls=await overlay();
   assert.ok(calls.indexOf('play')<calls.findIndex(c=>c[0]==='celebration_started'));

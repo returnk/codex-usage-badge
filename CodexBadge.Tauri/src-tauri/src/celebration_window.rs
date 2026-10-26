@@ -6,6 +6,7 @@ use tauri::{AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindow, Webvi
 #[derive(Default)]
 pub struct Overlay {
     hwnd: isize,
+    window: Option<WebviewWindow>,
     generation: u64,
     pending_session: Option<u64>,
     playing: Option<Playing>,
@@ -48,6 +49,11 @@ fn initialize_native(window: &WebviewWindow, children: bool) -> Result<(), Strin
 
 pub fn hide(overlay: &mut Overlay) {
     native::hide(overlay.hwnd);
+    if overlay.playing.is_some() || overlay.pending_session.is_some() {
+        if let Some(window) = &overlay.window {
+            let _ = window.emit("celebration-cancel", ());
+        }
+    }
     overlay.generation = overlay.generation.wrapping_add(1);
     overlay.pending_session = None;
     overlay.playing = None;
@@ -145,8 +151,11 @@ pub async fn request_celebration(
     })();
     match built {
         Ok(overlay) => {
-            state.inner.lock().unwrap().celebration_overlay.hwnd =
-                overlay.hwnd().map_err(|e| e.to_string())?.0 as isize;
+            {
+                let mut m = state.inner.lock().unwrap();
+                m.celebration_overlay.hwnd = overlay.hwnd().map_err(|e| e.to_string())?.0 as isize;
+                m.celebration_overlay.window = Some(overlay.clone());
+            }
             let _ = overlay.emit("celebration-request", ());
             Ok(None)
         }
@@ -233,6 +242,7 @@ fn show_ready(shared: &Arc<Shared>, window: &WebviewWindow) -> Result<Option<Val
     m.celebration_overlay.generation = m.celebration_overlay.generation.wrapping_add(1);
     let generation = m.celebration_overlay.generation;
     let kind = event.kind;
+    let duration_ms = if kind == "reset" { 5000 } else { 2500 };
     m.celebration_overlay.playing = Some(Playing {
         id: generation,
         event,
@@ -244,7 +254,7 @@ fn show_ready(shared: &Arc<Shared>, window: &WebviewWindow) -> Result<Option<Val
     let shared = Arc::clone(shared);
     let app = window.app_handle().clone();
     thread::spawn(move || {
-        thread::sleep(Duration::from_millis(2800));
+        thread::sleep(Duration::from_millis(duration_ms + 300));
         let emitter = app.clone();
         let _ = app.run_on_main_thread(move || {
             let mut m = shared.inner.lock().unwrap();
@@ -270,7 +280,7 @@ fn show_ready(shared: &Arc<Shared>, window: &WebviewWindow) -> Result<Option<Val
         });
     });
     Ok(Some(
-        json!({"kind":kind,"playId":generation,"origin":{"x":ox,"y":oy}}),
+        json!({"kind":kind,"playId":generation,"durationMs":duration_ms,"origin":{"x":ox,"y":oy}}),
     ))
 }
 

@@ -1,7 +1,7 @@
 // Local canvas-confetti renderer for both celebrations in the outside layer.
 window.BadgeCelebration = (() => {
   let stop = () => {};
-  function play(canvas, kind, origin = {x:0.5,y:0.65}) {
+  function play(canvas, kind, origin = {x:0.5,y:0.65}, durationMs = kind === 'reset' ? 5000 : 2500) {
     stop();
     if (!['welcome','reset'].includes(kind) || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
     const fire = window.confetti.create(canvas,{resize:true,useWorker:false,disableForReducedMotion:true});
@@ -22,13 +22,13 @@ window.BadgeCelebration = (() => {
     } else {
       const burst = () => {
         if (cancelled) return;
-        fire({...common,particleCount:22+Math.floor(Math.random()*15),angle:50+Math.random()*80,
+        fire({...common,ticks:125,particleCount:22+Math.floor(Math.random()*15),angle:50+Math.random()*80,
           spread:65+Math.random()*60,startVelocity:24+Math.random()*10});
       };
       burst();
-      timers.push(setTimeout(burst,400));
+      for (const delay of [500,1100,1750,2400,2900]) timers.push(setTimeout(burst,delay));
     }
-    timers.push(setTimeout(() => stop(),2500));
+    timers.push(setTimeout(() => stop(),durationMs));
   }
   return {play,cancel:()=>stop()};
 })();
