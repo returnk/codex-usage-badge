@@ -16,6 +16,8 @@ Tauri 2 + Rust + system WebView2 implementation for Windows 10/11 x64. This dire
 
 ## Build
 
+Signed release packaging and upload: [release workflow](docs/release.md). Select checks for the changed code; the commands below are available checks, not a mandatory sequence for every task. Full automated checks run in CI.
+
 Install Rust MSVC, Visual Studio C++ Build Tools, Node.js, and system WebView2. From this directory:
 
 ```powershell
