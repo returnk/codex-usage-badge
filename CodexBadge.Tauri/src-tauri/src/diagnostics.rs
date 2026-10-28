@@ -68,6 +68,10 @@ fn sanitize_event(event: &str) -> String {
             | "celebration_play"
             | "celebration_reset_confirmed"
             | "celebration_candidate"
+            | "celebration_waiting"
+            | "celebration_observation"
+            | "celebration_queue"
+            | "celebration_acknowledged"
             | "celebration_rejected"
             | "celebration_expired"
             | "celebration_play_failed"
@@ -114,6 +118,25 @@ fn sanitize_event(event: &str) -> String {
                 | "window_style"
                 | "started"
                 | "elapsed_ms"
+                | "reset_rules"
+                | "correlation"
+                | "identity"
+                | "window_minutes"
+                | "before_at"
+                | "candidate_at"
+                | "sampled_at"
+                | "decision_at"
+                | "original_reset"
+                | "candidate_reset"
+                | "current_reset"
+                | "before_remaining"
+                | "candidate_remaining"
+                | "current_remaining"
+                | "before_count"
+                | "current_count"
+                | "before_details"
+                | "current_details"
+                | "quick_reads"
         ) && !value.is_empty()
             && value
                 .chars()
@@ -124,6 +147,19 @@ fn sanitize_event(event: &str) -> String {
         ) && matches!(
             value,
             "invalid_snapshot"
+                | "evidence_pending"
+                | "candidate_timeout"
+                | "natural_boundary"
+                | "period_incompatible"
+                | "quota_rollback"
+                | "account_changed"
+                | "window_changed"
+                | "history_expired"
+                | "read_interrupted"
+                | "confirmation_delay"
+                | "baseline"
+                | "below_threshold"
+                | "duplicate_event"
                 | "confirmation_gap"
                 | "confirmation_changed"
                 | "save"
@@ -183,7 +219,13 @@ fn sanitize_event(event: &str) -> String {
                 | "retain"
                 | "logger"
         ) && matches!(value, "true" | "false");
-        if numeric || category || boolean || (key == "code" && value == "none") {
+        let version = key == "version"
+            && value.split('.').count() == 3
+            && value
+                .split('.')
+                .all(|part| !part.is_empty() && part.chars().all(|c| c.is_ascii_digit()));
+        let absent = matches!(key, "code" | "before_count" | "current_count") && value == "none";
+        if numeric || category || boolean || version || absent {
             output.push(' ');
             output.push_str(word);
         }
@@ -267,7 +309,8 @@ pub fn init() {
         HEALTHY.store(false, Ordering::Release);
     });
     record(format!(
-        "start native_region={} hover_detail={} default_cursor={}",
+        "start version={} reset_rules=2 native_region={} hover_detail={} default_cursor={}",
+        env!("CARGO_PKG_VERSION"),
         !no_native_region(),
         !no_hover_detail(),
         default_cursor()
@@ -295,6 +338,21 @@ pub fn record(event: impl Into<String>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reset_decision_fields_survive_but_identity_and_card_contents_do_not() {
+        let fields = "celebration_waiting reason=evidence_pending correlation=123 identity=456 window_minutes=10080 before_at=100 candidate_at=160 sampled_at=163 original_reset=9000 candidate_reset=20000 current_reset=20001 before_remaining=20 candidate_remaining=100 current_remaining=98 before_count=2 current_count=1 before_details=1 current_details=0 quick_reads=1 retain=true";
+        assert_eq!(
+            sanitize_event(&format!(
+                "{fields} account=a@example.test card_id=secret token=secret"
+            )),
+            fields
+        );
+        assert_eq!(
+            sanitize_event("start version=0.3.4 reset_rules=2 version=SECRET_TOKEN"),
+            "start version=0.3.4 reset_rules=2"
+        );
+    }
 
     #[test]
     fn log_boundary_drops_raw_errors_paths_and_untrusted_fields() {

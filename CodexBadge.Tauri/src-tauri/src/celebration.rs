@@ -4,6 +4,9 @@ use serde::{Deserialize, Serialize};
 const HISTORY_TTL: i64 = 7 * 86400;
 const EVENT_TTL: i64 = 86400;
 const CONFIRM_SECONDS: i64 = 3;
+// Two quick reads, then normal polling, for at most five minutes. This is a
+// local evidence budget, not a promise about the service's synchronization time.
+const CANDIDATE_TTL: i64 = 300;
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default)]
@@ -46,17 +49,32 @@ pub fn stable_fingerprint(bytes: &[u8]) -> u64 {
     })
 }
 impl ResetKey {
+    fn correlation(&self) -> u64 {
+        stable_fingerprint(&serde_json::to_vec(self).unwrap())
+    }
     fn event_id(&self) -> String {
-        format!(
-            "reset-{:016x}",
-            stable_fingerprint(&serde_json::to_vec(self).unwrap())
-        )
+        format!("reset-{:016x}", self.correlation())
     }
 }
 fn recent(now: i64, then: i64, ttl: i64) -> bool {
     (0..=ttl).contains(&now.saturating_sub(then))
 }
 impl CelebrationState {
+    // Coalesce notifications into the existing confirmation/normal schedule;
+    // a pending candidate must not turn repeated notifications into 1s polling.
+    pub fn refresh_delay(&self, account: Option<u64>, now: i64, notified: bool) -> u64 {
+        if self
+            .histories
+            .iter()
+            .any(|h| Some(h.account) == account && h.detector.candidate.is_some())
+        {
+            self.confirmation_delay(account, now).unwrap_or(60)
+        } else if notified {
+            1
+        } else {
+            60
+        }
+    }
     pub fn confirmation_delay(&self, account: Option<u64>, now: i64) -> Option<u64> {
         let candidate = self
             .histories
@@ -65,10 +83,16 @@ impl CelebrationState {
             .detector
             .candidate
             .as_ref()?;
+        if !recent(now, candidate.snapshot.fetched_at, CANDIDATE_TTL)
+            || candidate.quick_reads >= 2
+            || candidate.interrupted
+        {
+            return None;
+        }
         Some(
             (candidate
-                .snapshot
-                .fetched_at
+                .last_check_at
+                .unwrap_or(candidate.snapshot.fetched_at)
                 .saturating_add(CONFIRM_SECONDS)
                 .saturating_sub(now))
             .clamp(1, 60) as u64,
@@ -88,6 +112,20 @@ impl CelebrationState {
                 .is_some_and(|(s, _)| recent(now, s.fetched_at, HISTORY_TTL))
         });
         for history in &mut self.histories {
+            if history
+                .detector
+                .candidate
+                .as_ref()
+                .is_some_and(|c| now.saturating_sub(c.snapshot.fetched_at) > CANDIDATE_TTL)
+            {
+                let c = history.detector.candidate.take().unwrap();
+                c.record(
+                    "celebration_rejected",
+                    "candidate_timeout",
+                    &c.snapshot,
+                    now,
+                );
+            }
             if history.detector.candidate.as_ref().is_some_and(|c| {
                 !valid_snapshot(&c.snapshot)
                     || !valid_snapshot(&c.before)
@@ -107,8 +145,26 @@ impl CelebrationState {
     }
     pub fn interrupt(&mut self) {
         for history in &mut self.histories {
+            if let Some(candidate) = &mut history.detector.candidate {
+                candidate.interrupted = true;
+                candidate.record(
+                    "celebration_waiting",
+                    "read_interrupted",
+                    &candidate.snapshot,
+                    crate::epoch_now(),
+                );
+            }
+        }
+    }
+    pub fn account_changed(&mut self) {
+        for history in &mut self.histories {
             if let Some(candidate) = history.detector.candidate.take() {
-                history.detector.previous = Some((candidate.before, history.account));
+                candidate.record(
+                    "celebration_rejected",
+                    "account_changed",
+                    &candidate.snapshot,
+                    crate::epoch_now(),
+                );
             }
         }
     }
@@ -118,11 +174,6 @@ impl CelebrationState {
             self.interrupt();
             return;
         };
-        if !valid_snapshot(snapshot) {
-            self.interrupt();
-            crate::diagnostics::record("celebration_rejected reason=invalid_snapshot");
-            return;
-        }
         let index = self
             .histories
             .iter()
@@ -152,8 +203,14 @@ impl CelebrationState {
             .chain(&self.handled)
             .any(|e| e.key == key)
         {
+            crate::diagnostics::record(format!("celebration_queue reason=duplicate_event correlation={} identity={} accepted=false", key.correlation(), key.account));
             return false;
         }
+        crate::diagnostics::record(format!(
+            "celebration_queue correlation={} identity={} accepted=true",
+            key.correlation(),
+            key.account
+        ));
         self.pending.push(ResetEvent {
             key,
             detected_at: now,
@@ -199,6 +256,13 @@ impl CelebrationState {
             next.handled.push(played);
         }
         save(&next)?;
+        if let Some(played) = next.handled.last().filter(|e| e.key.event_id() == id) {
+            crate::diagnostics::record(format!(
+                "celebration_acknowledged correlation={} identity={}",
+                played.key.correlation(),
+                played.key.account
+            ));
+        }
         *self = next;
         Ok(true)
     }
@@ -210,9 +274,43 @@ struct ResetCandidate {
     snapshot: Snapshot,
     key: ResetKey,
     original_reset: i64,
-    five_hour_before: Option<f64>,
     #[serde(default)]
     five_hour: bool,
+    #[serde(default)]
+    quick_reads: u8,
+    #[serde(default)]
+    last_check_at: Option<i64>,
+    #[serde(default)]
+    interrupted: bool,
+    #[serde(default)]
+    resumed_at: Option<i64>,
+}
+impl ResetCandidate {
+    fn record(&self, event: &str, reason: &str, current: &Snapshot, now: i64) {
+        let value = |s: &Snapshot| {
+            window(s, self.five_hour)
+                .map(|w| w.remaining)
+                .unwrap_or(-1.0)
+        };
+        let reset = |s: &Snapshot| {
+            window(s, self.five_hour)
+                .and_then(|w| w.resets_at)
+                .unwrap_or(0)
+        };
+        let count = |s: &Snapshot| {
+            s.available_credits
+                .map(|n| n.to_string())
+                .unwrap_or_else(|| "none".into())
+        };
+        crate::diagnostics::record(format!(
+            "{event} reason={reason} correlation={} identity={} window_minutes={} before_at={} candidate_at={} sampled_at={} decision_at={} original_reset={} candidate_reset={} current_reset={} before_remaining={} candidate_remaining={} current_remaining={} before_count={} current_count={} before_details={} current_details={} quick_reads={} retain={}",
+            self.key.correlation(), self.key.account, if self.five_hour {300} else {10080},
+            self.before.fetched_at, self.snapshot.fetched_at, current.fetched_at, now, self.original_reset,
+            reset(&self.snapshot), reset(current), value(&self.before), value(&self.snapshot), value(current),
+            count(&self.before), count(current), self.before.credits.len(), current.credits.len(), self.quick_reads,
+            event == "celebration_waiting"
+        ));
+    }
 }
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct ResetDetector {
@@ -231,14 +329,6 @@ fn valid_snapshot(snapshot: &Snapshot) -> bool {
                         && w.resets_at.is_some_and(|at| at > snapshot.fetched_at)
                 })
         })
-        && snapshot.available_credits == Some(snapshot.credits.len() as u64)
-        && snapshot.credits.iter().enumerate().all(|(index, card)| {
-            !card.id.is_empty()
-                && card.expires_at > snapshot.fetched_at
-                && !snapshot.credits[..index]
-                    .iter()
-                    .any(|other| other.id == card.id)
-        })
 }
 fn window(snapshot: &Snapshot, five_hour: bool) -> Option<&QuotaWindow> {
     if five_hour {
@@ -247,35 +337,65 @@ fn window(snapshot: &Snapshot, five_hour: bool) -> Option<&QuotaWindow> {
         snapshot.weekly.as_ref()
     }
 }
-fn same_inventory(a: &Snapshot, b: &Snapshot) -> bool {
-    a.available_credits == b.available_credits
-        && a.credits.len() == b.credits.len()
-        && a.credits.iter().all(|card| b.credits.contains(card))
-}
 impl ResetDetector {
     pub fn clear(&mut self) {
         *self = Self::default();
     }
     pub fn observe(&mut self, snapshot: &Snapshot, account: Option<u64>) -> Option<ResetKey> {
         let Some(account) = account else {
+            if let Some(c) = &self.candidate {
+                c.record(
+                    "celebration_rejected",
+                    "account_changed",
+                    snapshot,
+                    snapshot.fetched_at,
+                );
+            }
             self.clear();
             return None;
         };
+        if self.candidate.as_ref().is_some_and(|c| {
+            snapshot.fetched_at.saturating_sub(c.snapshot.fetched_at) > CANDIDATE_TTL
+        }) {
+            let c = self.candidate.take().unwrap();
+            c.record(
+                "celebration_rejected",
+                "candidate_timeout",
+                snapshot,
+                snapshot.fetched_at,
+            );
+        }
         if !valid_snapshot(snapshot) {
-            self.candidate = None;
+            if let Some(c) = &mut self.candidate {
+                c.interrupted = true;
+                c.record(
+                    "celebration_waiting",
+                    "invalid_snapshot",
+                    snapshot,
+                    snapshot.fetched_at,
+                );
+            } else {
+                crate::diagnostics::record(format!(
+                    "celebration_observation reason=invalid_snapshot identity={} sampled_at={}",
+                    account, snapshot.fetched_at
+                ));
+            }
             return None;
         }
         // RPC replies and notifications can repeat the exact sample within one
         // second. They add no evidence and must not erase a pending recovery.
-        if self
-            .previous
-            .as_ref()
-            .is_some_and(|(before, old_account)| *old_account == account && before == snapshot)
-        {
+        if self.previous.as_ref().is_some_and(|(before, old_account)| {
+            *old_account == account
+                && (before == snapshot || snapshot.fetched_at < before.fetched_at)
+        }) {
             return None;
         }
         let previous = self.previous.replace((snapshot.clone(), account));
         let Some((before, old_account)) = previous else {
+            crate::diagnostics::record(format!(
+                "celebration_observation reason=baseline identity={} sampled_at={}",
+                account, snapshot.fetched_at
+            ));
             return None;
         };
         if account != old_account
@@ -285,15 +405,25 @@ impl ResetDetector {
             || !valid_snapshot(&before)
             || !valid_snapshot(snapshot)
         {
+            let reason = if account != old_account {
+                "account_changed"
+            } else if !recent(snapshot.fetched_at, before.fetched_at, HISTORY_TTL) {
+                "history_expired"
+            } else {
+                "window_changed"
+            };
+            if let Some(c) = &self.candidate {
+                c.record(
+                    "celebration_rejected",
+                    reason,
+                    snapshot,
+                    snapshot.fetched_at,
+                );
+            }
             self.candidate = None;
             return None;
         }
-        if let Some(candidate) = self.candidate.take() {
-            if !recent(snapshot.fetched_at, before.fetched_at, 180) {
-                crate::diagnostics::record("celebration_rejected reason=confirmation_gap");
-                self.previous = Some((candidate.before, account));
-                return self.observe(snapshot, Some(account));
-            }
+        if let Some(mut candidate) = self.candidate.take() {
             let Some(target) = window(&candidate.snapshot, candidate.five_hour) else {
                 return None;
             };
@@ -304,54 +434,100 @@ impl ResetDetector {
                 return None;
             };
             let card_reset = candidate.key.consumed_credit.is_some();
-            let five = snapshot.five_hour.as_ref().map(|w| w.remaining);
-            let confirmed = candidate.original_reset
-                > snapshot
+            let cancelled = if candidate.original_reset
+                <= snapshot
                     .fetched_at
                     .saturating_add(if card_reset { 120 } else { 300 })
-                && current.resets_at == target.resets_at
+            {
+                Some("natural_boundary")
+            } else if current.resets_at < original.resets_at {
+                Some("period_incompatible")
+            } else if current.resets_at == original.resets_at
+                && current.remaining <= original.remaining
+            {
+                Some("quota_rollback")
+            } else {
+                None
+            };
+            if let Some(reason) = cancelled {
+                candidate.record(
+                    "celebration_rejected",
+                    reason,
+                    snapshot,
+                    snapshot.fetched_at,
+                );
+                return None;
+            }
+            let confirmed = (current.resets_at > original.resets_at
                 && (target.resets_at > original.resets_at
-                    || (current.remaining > original.remaining
-                        && current.remaining >= target.remaining - 5.0))
-                && same_inventory(&candidate.snapshot, snapshot)
-                && (!card_reset
-                    || candidate.five_hour_before.is_none_or(|v| v >= 99.0)
-                    || five.is_some_and(|v| v >= 94.0));
+                    || current.remaining > original.remaining))
+                || (current.remaining > original.remaining
+                    && current.remaining >= target.remaining - 5.0);
+            let due = candidate
+                .last_check_at
+                .unwrap_or(candidate.snapshot.fetched_at)
+                .saturating_add(CONFIRM_SECONDS);
+            if snapshot.fetched_at >= due && candidate.quick_reads < 2 {
+                candidate.quick_reads += 1;
+                candidate.last_check_at = Some(snapshot.fetched_at);
+            }
+            if candidate.interrupted {
+                candidate.interrupted = false;
+                candidate.resumed_at = Some(snapshot.fetched_at);
+            }
+            let confirmation_start = candidate
+                .resumed_at
+                .unwrap_or(candidate.snapshot.fetched_at);
             if confirmed {
-                if snapshot
-                    .fetched_at
-                    .saturating_sub(candidate.snapshot.fetched_at)
-                    < CONFIRM_SECONDS
-                {
+                if snapshot.fetched_at.saturating_sub(confirmation_start) < CONFIRM_SECONDS {
+                    candidate.record(
+                        "celebration_waiting",
+                        "confirmation_delay",
+                        snapshot,
+                        snapshot.fetched_at,
+                    );
                     self.candidate = Some(candidate);
                     return None;
                 }
-                crate::diagnostics::record(if card_reset {
-                    "celebration_reset_confirmed reason=consumed_live_credit"
-                } else {
-                    "celebration_reset_confirmed reason=early_quota_recovery"
-                });
+                candidate.record(
+                    "celebration_reset_confirmed",
+                    if card_reset {
+                        "consumed_live_credit"
+                    } else {
+                        "early_quota_recovery"
+                    },
+                    snapshot,
+                    snapshot.fetched_at,
+                );
                 return Some(candidate.key);
             }
-            crate::diagnostics::record("celebration_rejected reason=confirmation_changed");
+            candidate.record(
+                "celebration_waiting",
+                "evidence_pending",
+                snapshot,
+                snapshot.fetched_at,
+            );
+            self.candidate = Some(candidate);
+            return None;
         }
         let consumed = before.credits.iter().find(|card| {
-            card.expires_at > snapshot.fetched_at.saturating_add(120)
+            !card.id.is_empty()
+                && card.expires_at > snapshot.fetched_at.saturating_add(120)
                 && !snapshot.credits.iter().any(|next| next.id == card.id)
         });
         let consumed_credit = consumed.filter(|card| {
-            before.available_credits == snapshot.available_credits.and_then(|n| n.checked_add(1))
+            before.available_credits.is_some()
+                && before.available_credits == Some(before.credits.len() as u64)
+                && snapshot.available_credits == Some(snapshot.credits.len() as u64)
+                && before.available_credits
+                    == snapshot.available_credits.and_then(|n| n.checked_add(1))
                 && before
                     .credits
                     .iter()
                     .filter(|c| c.id != card.id)
                     .all(|c| snapshot.credits.contains(c))
         });
-        let five_hour_before = before.five_hour.as_ref().map(|w| w.remaining);
         let card_reset = consumed_credit.is_some();
-        if !card_reset && !same_inventory(&before, snapshot) {
-            return None;
-        }
         let recovered = [false, true].into_iter().find_map(|five_hour| {
             let old = window(&before, five_hour)?;
             let current = window(snapshot, five_hour)?;
@@ -368,7 +544,6 @@ impl ResetDetector {
             let eligible = old_reset > snapshot.fetched_at.saturating_add(if card_reset {120} else {300})
                 && current.resets_at >= old.resets_at
                 && (full_recovery || large_recovery || spent_card_recovery)
-                && (!card_reset || snapshot.five_hour.as_ref().is_none_or(|w| w.remaining >= 99.0))
                 // An hourly-only change in a dual-window account must leave the
                 // weekly quota full, rather than mistaking an ordinary hourly refill for a reset.
                 && (!five_hour || snapshot.weekly.as_ref().is_none_or(|w| w.remaining >= 99.99)
@@ -376,20 +551,48 @@ impl ResetDetector {
             eligible.then_some((five_hour, old_reset, current.resets_at.unwrap()))
         });
         if let Some((five_hour, old_reset, new_reset)) = recovered {
-            crate::diagnostics::record("celebration_candidate");
-            self.candidate = Some(ResetCandidate {
+            let candidate = ResetCandidate {
                 before: before.clone(),
                 snapshot: snapshot.clone(),
                 original_reset: old_reset,
-                five_hour_before,
                 five_hour,
+                quick_reads: 0,
+                last_check_at: None,
+                interrupted: false,
+                resumed_at: None,
                 key: ResetKey {
                     account,
                     resets_at: new_reset,
                     consumed_credit: consumed_credit.map(|card| card.id.clone()),
                     recovery_from: Some(before.fetched_at),
                 },
-            });
+            };
+            candidate.record(
+                "celebration_candidate",
+                "early_quota_recovery",
+                snapshot,
+                snapshot.fetched_at,
+            );
+            self.candidate = Some(candidate);
+        } else {
+            for five_hour in [false, true] {
+                if let (Some(old), Some(current)) =
+                    (window(&before, five_hour), window(snapshot, five_hour))
+                {
+                    let reason = if old.resets_at.is_some_and(|at| {
+                        at <= snapshot
+                            .fetched_at
+                            .saturating_add(if card_reset { 120 } else { 300 })
+                    }) {
+                        "natural_boundary"
+                    } else if current.resets_at < old.resets_at {
+                        "period_incompatible"
+                    } else {
+                        "below_threshold"
+                    };
+                    crate::diagnostics::record(format!("celebration_observation reason={} identity={} window_minutes={} before_at={} sampled_at={} original_reset={} current_reset={} before_remaining={} current_remaining={}", reason, account, current.minutes, before.fetched_at, snapshot.fetched_at, old.resets_at.unwrap_or(0), current.resets_at.unwrap_or(0), old.remaining, current.remaining));
+                }
+            }
         }
         None
     }
@@ -398,6 +601,164 @@ impl ResetDetector {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn recovery_with_count_only_partial_or_unknown_cards_confirms() {
+        for mode in 0..3 {
+            let mut d = ResetDetector::default();
+            let mut before = sample(100, 99.0, 9000, true);
+            let mut after = sample(160, 100.0, 9000, true);
+            for s in [&mut before, &mut after] {
+                match mode {
+                    0 => s.credits.clear(),
+                    1 => s.available_credits = Some(4),
+                    _ => {
+                        s.available_credits = None;
+                        s.credits.clear();
+                    }
+                }
+            }
+            d.observe(&before, Some(1));
+            d.observe(&after, Some(1));
+            after.fetched_at = 163;
+            after.weekly.as_mut().unwrap().remaining = 99.5;
+            assert!(d.observe(&after, Some(1)).is_some(), "mode={mode}");
+        }
+    }
+    #[test]
+    fn staged_card_updates_and_adjusted_deadline_keep_original_recovery() {
+        for reset in [9000, 19999, 21000] {
+            let mut state = CelebrationState::existing_install();
+            state.observe(&sample(100, 20.0, 9000, true), Some(1));
+            state.observe(&sample(160, 100.0, 20000, true), Some(1));
+            state = restored(&state);
+            state.observe(&sample(163, 98.0, reset, false), Some(1));
+            assert_eq!(
+                played(&mut state, Some(1), 163),
+                Some("reset"),
+                "reset={reset}"
+            );
+            state = restored(&state);
+            assert_eq!(played(&mut state, Some(1), 164), None);
+        }
+    }
+    #[test]
+    fn uncertain_confirmation_waits_without_replacing_recovery_baseline() {
+        let mut state = CelebrationState::existing_install();
+        state.observe(&sample(100, 20.0, 9000, true), Some(1));
+        state.observe(&sample(160, 100.0, 9000, true), Some(1));
+        state.observe(&sample(163, 90.0, 9000, false), Some(1));
+        assert!(state.peek(Some(1), 163).is_none());
+        assert_eq!(
+            state.histories[0]
+                .detector
+                .candidate
+                .as_ref()
+                .unwrap()
+                .before
+                .fetched_at,
+            100
+        );
+        state = restored(&state);
+        state.observe(&sample(166, 89.0, 9000, false), Some(1));
+        assert_eq!(state.confirmation_delay(Some(1), 166), None);
+        assert_eq!(state.refresh_delay(Some(1), 166, true), 60);
+        state.observe(&sample(226, 88.0, 20000, false), Some(1));
+        assert_eq!(played(&mut state, Some(1), 226), Some("reset"));
+    }
+    #[test]
+    fn waiting_candidate_expires_and_does_not_restart_from_original_baseline() {
+        let mut state = CelebrationState::existing_install();
+        state.observe(&sample(100, 20.0, 9000, true), Some(1));
+        state.observe(&sample(160, 100.0, 9000, true), Some(1));
+        for at in [163, 166, 226, 286, 346, 406, 460] {
+            state.observe(&sample(at, 90.0, 9000, true), Some(1));
+            assert!(state.histories[0].detector.candidate.is_some());
+        }
+        state.observe(&sample(461, 90.0, 9000, true), Some(1));
+        assert!(state.histories[0].detector.candidate.is_none());
+        assert!(state.peek(Some(1), 461).is_none());
+        assert_eq!(state.confirmation_delay(Some(1), 461), None);
+    }
+    #[test]
+    fn invalid_quota_read_preserves_candidate_until_fresh_confirmation() {
+        let mut state = CelebrationState::existing_install();
+        state.observe(&sample(100, 20.0, 9000, true), Some(1));
+        state.observe(&sample(160, 100.0, 20000, true), Some(1));
+        let mut invalid = sample(163, 100.0, 20000, true);
+        invalid.weekly.as_mut().unwrap().remaining = f64::NAN;
+        state.observe(&invalid, Some(1));
+        assert_eq!(
+            state.histories[0]
+                .detector
+                .candidate
+                .as_ref()
+                .unwrap()
+                .before
+                .fetched_at,
+            100
+        );
+        state = restored(&state);
+        state.observe(&sample(220, 98.0, 20000, false), Some(1));
+        assert!(state.peek(Some(1), 220).is_none());
+        state.observe(&sample(223, 97.0, 20001, false), Some(1));
+        assert_eq!(played(&mut state, Some(1), 223), Some("reset"));
+    }
+    #[test]
+    fn notification_polling_and_restart_do_not_replenish_quick_reads() {
+        let mut state = CelebrationState::existing_install();
+        assert_eq!(state.refresh_delay(Some(1), 100, false), 60);
+        assert_eq!(state.refresh_delay(Some(1), 100, true), 1);
+        state.observe(&sample(100, 20.0, 9000, true), Some(1));
+        state.observe(&sample(160, 100.0, 9000, true), Some(1));
+        for at in [160, 161, 162] {
+            assert_eq!(state.refresh_delay(Some(1), at, true), (163 - at) as u64);
+        }
+        state.observe(&sample(163, 90.0, 9000, true), Some(1));
+        assert_eq!(state.refresh_delay(Some(1), 163, true), 3);
+        state.observe(&sample(166, 90.0, 9000, true), Some(1));
+        state = restored(&state);
+        for at in [166, 167, 180, 226] {
+            assert_eq!(state.refresh_delay(Some(1), at, true), 60);
+        }
+        state.interrupt();
+        state.observe(&sample(226, 90.0, 9000, true), Some(1));
+        assert_eq!(state.refresh_delay(Some(1), 226, true), 60);
+    }
+    #[test]
+    fn older_settings_candidate_and_handled_keys_remain_compatible() {
+        let mut state = CelebrationState::existing_install();
+        state.observe(&sample(100, 20.0, 9000, true), Some(1));
+        state.observe(&sample(160, 100.0, 20000, true), Some(1));
+        let mut json = serde_json::to_value(&state).unwrap();
+        let candidate = json["histories"][0]["detector"]["candidate"]
+            .as_object_mut()
+            .unwrap();
+        for key in ["quick_reads", "last_check_at", "interrupted", "resumed_at"] {
+            candidate.remove(key);
+        }
+        candidate.insert("five_hour_before".into(), serde_json::json!(100.0));
+        let mut state: CelebrationState = serde_json::from_value(json).unwrap();
+        state.observe(&sample(163, 98.0, 20001, false), Some(1));
+        assert_eq!(played(&mut state, Some(1), 163), Some("reset"));
+        let handled_id = state.handled[0].key.event_id();
+        state = restored(&state);
+        assert_eq!(state.handled[0].key.event_id(), handled_id);
+        let key = state.handled[0].key.clone();
+        assert!(!state.queue(key, 164));
+    }
+    #[test]
+    fn account_change_cancels_candidate_and_another_account_cannot_confirm_it() {
+        let mut state = CelebrationState::existing_install();
+        state.observe(&sample(100, 20.0, 9000, true), Some(1));
+        state.observe(&sample(160, 100.0, 20000, true), Some(1));
+        state.account_changed();
+        state.observe(&sample(163, 98.0, 20000, true), Some(2));
+        state.observe(&sample(166, 97.0, 20000, true), Some(2));
+        assert!(state.peek(Some(1), 166).is_none());
+        assert!(state.peek(Some(2), 166).is_none());
+        state.observe(&sample(169, 97.0, 20000, true), Some(1));
+        assert!(state.peek(Some(1), 169).is_none());
+    }
     #[test]
     fn consumed_card_still_confirms_after_some_of_the_restored_quota_is_used() {
         let mut state = CelebrationState::existing_install();
@@ -640,7 +1001,7 @@ mod tests {
             state.observe(&sample(160, 100.0, 20000, true), Some(1));
             if invalid_read {
                 let mut incomplete = sample(161, 100.0, 20000, true);
-                incomplete.available_credits = None;
+                incomplete.weekly.as_mut().unwrap().resets_at = None;
                 state.observe(&incomplete, Some(1));
             } else {
                 state.interrupt();
@@ -755,7 +1116,7 @@ mod tests {
             .is_none());
     }
     #[test]
-    fn normal_five_hour_recovery_and_expiring_card_do_not_celebrate() {
+    fn normal_five_hour_recovery_is_rejected_and_expiring_card_does_not_veto_weekly_recovery() {
         let mut before = sample(100, 92.0, 9000, true);
         before.five_hour.as_mut().unwrap().remaining = 0.0;
         let mut detector = ResetDetector::default();
@@ -774,7 +1135,7 @@ mod tests {
             .is_none());
         assert!(detector
             .observe(&sample(220, 98.0, 20000, false), Some(1))
-            .is_none());
+            .is_some());
     }
     #[test]
     fn confirmation_waits_and_keeps_candidate_across_fast_updates() {
@@ -807,7 +1168,7 @@ mod tests {
         }
     }
     #[test]
-    fn incomplete_inventory_and_unrestored_five_hour_are_rejected() {
+    fn weekly_recovery_allows_partial_cards_and_unrestored_hourly_but_rejects_invalid_window() {
         for mode in 0..4 {
             let mut before = sample(100, 20.0, 9000, true);
             before.five_hour.as_mut().unwrap().remaining = 30.0;
@@ -822,7 +1183,11 @@ mod tests {
             d.observe(&before, Some(1));
             d.observe(&after, Some(1));
             after.fetched_at = 220;
-            assert!(d.observe(&after, Some(1)).is_none());
+            assert_eq!(
+                d.observe(&after, Some(1)).is_some(),
+                mode != 3,
+                "mode={mode}"
+            );
         }
     }
     #[test]
@@ -835,8 +1200,8 @@ mod tests {
             .is_none());
     }
     #[test]
-    fn candidate_is_cancelled_by_changed_account_inventory_or_failed_read() {
-        for mode in 0..7 {
+    fn candidate_is_cancelled_by_identity_window_or_quota_rollback() {
+        for mode in 0..6 {
             let mut d = ResetDetector::default();
             let mut before = sample(100, 20.0, 9000, true);
             before.five_hour.as_mut().unwrap().remaining = 30.0;
@@ -847,10 +1212,9 @@ mod tests {
             match mode {
                 0 => account = Some(2), // Includes plan/source fingerprint changes.
                 1 => account = None,
-                2 => confirm = sample(220, 98.0, 20000, true),
-                3 => confirm.five_hour.as_mut().unwrap().remaining = 30.0,
-                4 => confirm.available_credits = None,
-                5 => confirm.weekly.as_mut().unwrap().resets_at = Some(9000),
+                2 => confirm.weekly = None,
+                3 => confirm.weekly.as_mut().unwrap().minutes = 43200,
+                4 => confirm = sample(220, 20.0, 9000, true),
                 _ => d.clear(), // Connection failure clears pending evidence.
             }
             assert!(d.observe(&confirm, account).is_none());
@@ -859,7 +1223,7 @@ mod tests {
         }
     }
     #[test]
-    fn expiring_inventory_during_official_confirmation_cancels_candidate() {
+    fn expiring_inventory_during_official_confirmation_does_not_cancel_quota_evidence() {
         let mut before = sample(100, 20.0, 9000, true);
         before.credits[0].expires_at = 200;
         let mut candidate = sample(160, 100.0, 20000, true);
@@ -869,7 +1233,7 @@ mod tests {
         d.observe(&candidate, Some(1));
         assert!(d
             .observe(&sample(220, 100.0, 20000, false), Some(1))
-            .is_none());
+            .is_some());
     }
     #[test]
     fn fast_notifications_keep_the_original_confirmation_deadline_and_account() {

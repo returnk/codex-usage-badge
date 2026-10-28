@@ -375,6 +375,9 @@ pub fn run(shared: Arc<Shared>, app: AppHandle) {
                             {
                                 break;
                             }
+                            if m.account_key.is_some() && m.account_key != account_key {
+                                m.settings.celebration_state.account_changed();
+                            }
                             m.account_key = account_key;
                             let mut next = m.settings.clone();
                             next.celebration_state.observe(&snapshot, account_key);
@@ -392,19 +395,15 @@ pub fn run(shared: Arc<Shared>, app: AppHandle) {
                         let _ = app.emit("state-updated", ());
                         crate::deliver_reminder(&shared, &app);
                         failures = 0;
-                        let confirmation_delay = shared
+                        let read_delay = shared
                             .inner
                             .lock()
                             .unwrap()
                             .settings
                             .celebration_state
-                            .confirmation_delay(account_key, now());
-                        next_read =
-                            Instant::now() + Duration::from_secs(confirmation_delay.unwrap_or(60));
-                        if server.pending_update {
-                            server.pending_update = false;
-                            next_read = Instant::now() + Duration::from_secs(1);
-                        }
+                            .refresh_delay(account_key, now(), server.pending_update);
+                        server.pending_update = false;
+                        next_read = Instant::now() + Duration::from_secs(read_delay);
                     }
                     Err(error) => {
                         if shared.quota_generation.load(Ordering::Acquire) != server.generation {
@@ -419,7 +418,14 @@ pub fn run(shared: Arc<Shared>, app: AppHandle) {
                 .saturating_duration_since(Instant::now())
                 .min(Duration::from_secs(1));
             match server.update_notification(wait) {
-                Ok(true) => next_read = next_read.min(Instant::now() + Duration::from_secs(1)),
+                Ok(true) => {
+                    let m = shared.inner.lock().unwrap();
+                    let delay =
+                        m.settings
+                            .celebration_state
+                            .refresh_delay(m.account_key, now(), true);
+                    next_read = next_read.min(Instant::now() + Duration::from_secs(delay));
+                }
                 Ok(false) => {}
                 Err(error) => {
                     fail(&shared, &app, &error);
@@ -450,7 +456,7 @@ fn select_account(m: &mut crate::Model, identity: u64) {
         m.plan_label = None;
         m.account_key = None;
         if m.quota_account.is_some() {
-            m.settings.celebration_state.interrupt();
+            m.settings.celebration_state.account_changed();
         }
         m.detail_credit_hint = None;
         m.credit_open = false;
