@@ -10,6 +10,22 @@
     "withGlobalTauri": true,
     "windows": [
       {
+        "label": "authorization",
+        "create": false,
+        "title": "临期用卡 · 账号授权",
+        "url": "authorization.html",
+        "width": 440,
+        "height": 500,
+        "visible": false,
+        "decorations": false,
+        "transparent": true,
+        "shadow": false,
+        "resizable": false,
+        "skipTaskbar": true,
+        "focusable": true,
+        "focus": false
+      },
+      {
         "label": "capsule",
         "create": false,
         "title": "Codex Badge",

@@ -2,6 +2,7 @@
 
 #[cfg(test)]
 mod acceptance;
+mod authorization_window;
 mod celebration;
 mod celebration_window;
 mod diagnostics;
@@ -1710,6 +1711,7 @@ fn sync_tray(app: &AppHandle, settings: &Settings) {
         let shared = app.state::<Arc<Shared>>();
         let reset = shared.inner.lock().unwrap().reset_view.clone();
         tray.reset_details(reset.hint_lines());
+        tray.reset_pending(shared.reset_authorize.load(Ordering::Acquire));
         tray.sync(
             settings.start_with_windows,
             settings.always_on_top,
@@ -1733,6 +1735,9 @@ fn retain_quota(host: bool, authorized: bool, authorizing: bool) -> bool {
 }
 
 fn change_expiring_reset(shared: &Arc<Shared>, app: &AppHandle) {
+    if shared.reset_authorize.load(Ordering::Acquire) {
+        return;
+    }
     let (enabled, scope) = {
         let m = shared.inner.lock().unwrap();
         (m.reset_view.enabled, m.reset_scope.clone())
@@ -1992,6 +1997,7 @@ fn main() {
                 }
             }
             app.manage(update_window::Controller::load());
+            app.manage(authorization_window::Controller::default());
             let handle = app.handle().clone();
             let tray_shared = shared.clone();
             let native_tray = tray::start(move |action| {
@@ -2043,6 +2049,9 @@ fn main() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            authorization_window::get_authorization_state,
+            authorization_window::authorization_ready,
+            authorization_window::answer_authorization,
             celebration_window::request_celebration,
             celebration_window::celebration_ready,
             celebration_window::celebration_started,
@@ -2421,12 +2430,11 @@ mod stability_tests {
     fn popup_configs_never_request_initial_focus() {
         let config: tauri::Config =
             serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
-        assert_eq!(config.app.windows.len(), 5);
-        assert!(config
-            .app
-            .windows
-            .iter()
-            .all(|w| !w.focus && (!w.focusable || w.label == "update") && !w.visible && !w.create));
+        assert_eq!(config.app.windows.len(), 6);
+        assert!(config.app.windows.iter().all(|w| !w.focus
+            && (!w.focusable || matches!(w.label.as_str(), "update" | "authorization"))
+            && !w.visible
+            && !w.create));
     }
     #[test]
     fn normal_backend_opens_capsule_menu_and_old_close_cannot_hide_new_request() {

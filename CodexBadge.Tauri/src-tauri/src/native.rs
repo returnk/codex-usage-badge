@@ -503,17 +503,96 @@ pub fn round_capsule(raw: isize, width: i32, height: i32) {
             ));
             return;
         }
-        // Leave the CSS antialiased edge inside the native region. A matching
-        // GDI curve clips fractional WebView pixels into a jagged edge.
         let curve = crate::domain::native_capsule_curve(height);
-        let region = CreateRoundRectRgn(0, 0, width, height, curve, curve);
+        let applied = round_surface(raw, width, height, curve);
+        crate::diagnostics::record(format!(
+            "capsule_region applied={applied} size={width}x{height}"
+        ));
+    }
+}
+
+pub fn round_surface(raw: isize, width: i32, height: i32, curve: i32) -> bool {
+    unsafe {
+        // GDI excludes the bottom/right endpoints. Keep the guard outside the
+        // visible CSS arc, rather than clipping its antialiased coverage.
+        let region = CreateRoundRectRgn(0, 0, width + 1, height + 1, curve, curve);
         let applied = SetWindowRgn(hwnd(raw), Some(region), true) != 0;
         if !applied {
             let _ = DeleteObject(HGDIOBJ(region.0));
         }
-        crate::diagnostics::record(format!(
-            "capsule_region applied={applied} size={width}x{height}"
-        ));
+        applied
+    }
+}
+
+#[test]
+fn rounded_regions_preserve_css_edges_with_browser_pixel_rounding() {
+    use windows::core::w;
+    use windows::Win32::Graphics::Gdi::{CreateRectRgn, GetWindowRgn, PtInRegion};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        CreateWindowExW, DestroyWindow, WINDOW_EX_STYLE,
+    };
+    let _guard = WINDOW_TEST_LOCK.lock().unwrap();
+    unsafe {
+        let window = CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("STATIC"),
+            w!("region test"),
+            WS_POPUP,
+            0,
+            0,
+            100,
+            100,
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        for dpi in [96, 120, 144, 168, 192, 240, 288] {
+            let scale = dpi as f64 / 96.0;
+            for (dw, dh, card) in [
+                (28.8, 28.8, false),
+                (30.0, 30.0, false),
+                (72.0, 34.0, false),
+                (340.0, 300.0, true),
+                (440.0, 560.0, true),
+            ] {
+                let w = crate::domain::dip_to_px(dw, dpi);
+                let h = crate::domain::dip_to_px(dh, dpi);
+                if card {
+                    round_surface(window.0 as isize, w, h, crate::domain::dip_to_px(14.0, dpi));
+                } else {
+                    round_capsule(window.0 as isize, w, h);
+                }
+                let region = CreateRectRgn(0, 0, 0, 0);
+                assert_ne!(GetWindowRgn(window, region).0, 0);
+                for excess in [0.0, 1.0, 2.0] {
+                    let pad = 2.0 * scale;
+                    let right = w as f64 + excess - pad;
+                    let bottom = h as f64 + excess - pad;
+                    let radius = if card {
+                        14.0 * scale
+                    } else {
+                        ((right - pad).min(bottom - pad)) / 2.0
+                    };
+                    for y in 0..h {
+                        for x in 0..w {
+                            let px = x as f64 + 0.5;
+                            let py = y as f64 + 0.5;
+                            let cx = px.clamp(pad + radius, right - radius);
+                            let cy = py.clamp(pad + radius, bottom - radius);
+                            let coverage =
+                                (radius + 0.5 - (px - cx).hypot(py - cy)).clamp(0.0, 1.0);
+                            if coverage > 0.02 {
+                                assert!(PtInRegion(region,x,y).as_bool(), "clipped edge dpi={dpi} size={w}x{h} excess={excess} pixel={x},{y}");
+                            }
+                        }
+                    }
+                }
+                let _ = DeleteObject(HGDIOBJ(region.0));
+            }
+        }
+        DestroyWindow(window).unwrap();
     }
 }
 

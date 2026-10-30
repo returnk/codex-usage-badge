@@ -1,0 +1,21 @@
+body.view-authorization {padding:2px;font-size:12.5px;line-height:1.65;}
+.authorization-card {border-radius:14px;padding:18px;display:flex;flex-direction:column;}
+.authorization-card header {display:flex;align-items:center;justify-content:space-between;gap:12px;flex-shrink:0;}
+#authorization-title {font-size:19px;line-height:28px;}
+#authorization-close {border:0;background:transparent;color:var(--card-muted);font-size:24px;line-height:26px;padding:0;width:26px;height:26px;border-radius:6px;}
+.authorization-content {overflow:auto;min-height:0;flex:1;scrollbar-width:thin;}
+.authorization-account {display:grid;gap:3px;margin:16px 0;padding:10px 12px;background:rgba(56,111,194,.07);border-radius:10px;}
+.authorization-account>div {display:flex;align-items:center;flex-wrap:wrap;gap:8px;}
+#authorization-plan {font-size:10px;line-height:18px;padding:0 6px;border:1px solid var(--card-border);border-radius:7px;color:var(--link);}
+.authorization-account strong {font-size:14px;font-weight:600;overflow-wrap:anywhere;}
+.authorization-card p {margin:10px 0;}
+.authorization-card aside {border-radius:9px;padding:10px 12px;margin:16px 0;background:rgba(217,119,6,.1);color:var(--warning);}
+#authorization-error {color:var(--warning);overflow-wrap:anywhere;}
+.authorization-card footer {flex-shrink:0;border-top:1px solid var(--card-border);margin-top:14px;padding-top:14px;display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:10px;}
+#authorization-status {font-size:11px;}
+.authorization-card footer>div {display:flex;gap:10px;margin-left:auto;}
+.authorization-card footer button {border:1px solid var(--card-border);border-radius:7px;padding:6px 14px;background:transparent;color:var(--card-fg);white-space:nowrap;}
+#authorization-accept {background:#386fc2;border-color:transparent;color:#fff;}
+.authorization-card button:focus-visible {outline:2px solid var(--link);outline-offset:2px;}
+.authorization-card button:disabled {opacity:.55;cursor:default;}
+.authorization-card button:hover:not(:disabled) {filter:brightness(.95);}

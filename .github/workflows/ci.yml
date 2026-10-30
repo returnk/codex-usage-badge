@@ -27,7 +27,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: Frontend tests
-        run: node --test tests/frontend.test.cjs tests/celebration.test.cjs tests/installer.test.cjs tests/update-popover.test.cjs
+        run: node --test tests/frontend.test.cjs tests/celebration.test.cjs tests/installer.test.cjs tests/update-popover.test.cjs tests/authorization.test.cjs
       - name: Rust formatting
         run: cargo fmt --check --manifest-path src-tauri/Cargo.toml
       - name: Identify Rust compiler for cache

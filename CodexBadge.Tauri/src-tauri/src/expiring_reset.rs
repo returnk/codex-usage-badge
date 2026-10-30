@@ -315,31 +315,13 @@ impl View {
     pub fn hint_lines(&self) -> Vec<String> {
         let mut lines = vec![
             "到期前 30 分钟自动尝试，无需逐次确认。".into(),
-            "电脑和胶囊须运行；不保证兑换成功。".into(),
+            "电脑和 CodexBadge 须运行；不保证兑换成功。".into(),
             format!("状态：{}", self.status),
         ];
         if !self.last.is_empty() {
             lines.push(format!("最近：{}", self.last));
         }
         lines
-    }
-}
-
-pub fn confirm_authorization(label: &str) -> bool {
-    use windows::core::{w, PCWSTR};
-    use windows::Win32::UI::WindowsAndMessaging::{
-        MessageBoxW, IDYES, MB_DEFBUTTON2, MB_ICONWARNING, MB_YESNO,
-    };
-    let message: Vec<u16> = format!(
-        "为当前账号开启临期用卡？\n\n{label}\n\n在这台电脑上，胶囊将在免费卡到期前 30 分钟内，按官方允许的条件自动尝试兑换该账号的临期卡，包含今后新获得的卡，无需逐次确认，直到你关闭。\n\n已有额度不会与重置后的额度叠加，重置时间可能改变，兑换成功不能撤销。电脑须正常运行且胶囊驻留；关机、休眠或退出时不执行，无需打开 Codex 窗口。\n\n不要同时在多个设备或工具为同一账号启用自动用卡。此功能不能保证到期前成功。\n\n选择“是”即为此账号持续授权；“否”或关闭对话框不会开启。"
-    ).encode_utf16().chain(Some(0)).collect();
-    unsafe {
-        MessageBoxW(
-            None,
-            PCWSTR(message.as_ptr()),
-            w!("临期用卡 · 账号授权"),
-            MB_YESNO | MB_DEFBUTTON2 | MB_ICONWARNING,
-        ) == IDYES
     }
 }
 

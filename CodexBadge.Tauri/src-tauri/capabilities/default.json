@@ -8,7 +8,8 @@
     "credit",
     "menu",
     "celebration",
-    "update"
+    "update",
+    "authorization"
   ],
   "permissions": [
     "core:default"

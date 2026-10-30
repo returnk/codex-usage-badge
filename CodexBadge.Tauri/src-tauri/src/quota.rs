@@ -315,15 +315,27 @@ fn run_expiring_reset(
             return Err("账号、登录类型或计划尚不适用，自动用卡暂停".into());
         };
         if shared.reset_authorize.load(Ordering::Acquire) {
-            let accepted = expiring_reset::confirm_authorization(&sample.label);
-            if expiring_reset::authorize(&store, server, &sample, accepted, now())? {
+            let accepted = crate::authorization_window::confirm(app, &sample.label)?;
+            let authorized = expiring_reset::authorize(&store, server, &sample, accepted, now())?;
+            shared.reset_authorize.store(false, Ordering::Release);
+            if authorized {
                 shared.reset_background.store(true, Ordering::Release);
                 shared.reset_stopped.store(false, Ordering::Release);
-                let mut m = shared.inner.lock().unwrap();
-                m.reset_view.enabled = true;
-                m.reset_scope = Some(sample.scope.clone());
+                // The permit is already durable. Publish it before slower
+                // background eligibility reads, so the UI never looks unchecked
+                // after the user has successfully authorized this account.
+                let view = expiring_reset::View {
+                    enabled: true,
+                    background: true,
+                    status: "已开启；正在后台检查临期卡".into(),
+                    ..Default::default()
+                };
+                publish_reset(shared, app, view, Some(sample.scope.clone()));
+            } else {
+                let settings = shared.inner.lock().unwrap().settings.clone();
+                crate::sync_tray(app, &settings);
             }
-            shared.reset_authorize.store(false, Ordering::Release);
+            crate::authorization_window::finish(app, None);
         }
         let mut view = expiring_reset::process(
             &store,
@@ -341,7 +353,7 @@ fn run_expiring_reset(
         Ok((view, scope)) => publish_reset(shared, app, view, scope),
         Err(error) => {
             if shared.reset_authorize.swap(false, Ordering::AcqRel) {
-                expiring_reset::show_error(&error);
+                crate::authorization_window::finish(app, Some(error.clone()));
             }
             let record_failed = error.contains("执行记录");
             if record_failed {
@@ -652,6 +664,12 @@ fn fail(shared: &Shared, app: &AppHandle, error: &str) {
         m.quota_status = status.into();
     }
     let settings = shared.inner.lock().unwrap().settings.clone();
+    if shared.reset_authorize.swap(false, Ordering::AcqRel) {
+        crate::authorization_window::finish(
+            app,
+            Some(format!("{status}，此次未开启。请稍后重试。")),
+        );
+    }
     crate::sync_tray(app, &settings);
     let _ = app.emit("state-updated", ());
 }

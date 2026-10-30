@@ -45,6 +45,7 @@ struct State {
     tooltip: isize,
 
     tooltip_shown: bool,
+    authorization_return: Option<Open>,
 }
 pub fn create(
     owner: HWND,
@@ -102,6 +103,7 @@ pub fn create(
             button_down: false,
             tooltip,
             tooltip_shown: false,
+            authorization_return: None,
         });
         SetWindowLongPtrW(window, GWLP_USERDATA, Box::into_raw(state) as isize);
         Ok(window.0 as isize)
@@ -190,7 +192,17 @@ unsafe fn hint_layout(dpi: u32, lines: &[String]) -> ((i32, i32), Vec<RECT>) {
     let dc = CreateCompatibleDC(None);
     let font = text_font(11, dpi);
     let previous = SelectObject(dc, HGDIOBJ(font.0));
-    let width = p(310.0);
+    let width = lines
+        .iter()
+        .map(|line| {
+            let value: Vec<u16> = line.encode_utf16().collect();
+            let mut extent = SIZE::default();
+            let _ = GetTextExtentPoint32W(dc, &value, &mut extent);
+            extent.cx
+        })
+        .max()
+        .unwrap_or(1)
+        .clamp(1, p(310.0));
     let pad_x = p(12.0);
     let pad_y = p(8.0);
     let gap = p(4.0);
@@ -223,6 +235,19 @@ unsafe fn hint_layout(dpi: u32, lines: &[String]) -> ((i32, i32), Vec<RECT>) {
     let _ = DeleteObject(HGDIOBJ(font.0));
     let _ = DeleteDC(dc);
     ((width + pad_x * 2, top - gap + pad_y), rows)
+}
+
+#[test]
+fn hint_width_fits_short_text_and_wraps_long_results() {
+    unsafe {
+        for dpi in [96, 120, 144, 168, 192] {
+            let short = hint_layout(dpi, &["状态：当前账号未开启".into()]);
+            assert!(short.0 .0 < domain::dip_to_px(200.0, dpi));
+            let long = hint_layout(dpi, &["结果说明较长，需要按上限换行。".repeat(20)]);
+            assert!(long.0 .0 <= domain::dip_to_px(334.0, dpi) + 1);
+            assert!(long.0 .1 > short.0 .1);
+        }
+    }
 }
 
 unsafe fn paint_hint(window: HWND, state: &HintState, position: (i32, i32)) -> bool {
@@ -326,6 +351,63 @@ pub fn show(raw: isize, open: Open) {
             let _ = SetTimer(Some(window), 1, 40, None);
             let _ = InvalidateRect(Some(window), None, false);
         }
+    }
+}
+
+pub fn authorization(raw: isize, suspend: bool) {
+    unsafe {
+        let window = HWND(raw as _);
+        if let Some(state) = (GetWindowLongPtrW(window, GWLP_USERDATA) as *mut State).as_mut() {
+            if suspend {
+                hide(window, state);
+            } else if let Some(open) = state.authorization_return.take() {
+                show(raw, open);
+            }
+        }
+    }
+}
+
+#[test]
+fn authorization_returns_to_settings_with_current_check_state() {
+    let _guard = native::WINDOW_TEST_LOCK.lock().unwrap();
+    unsafe {
+        let checks = Arc::new(Checks::default());
+        let active = Arc::new(AtomicBool::new(false));
+        let raw = create(
+            HWND::default(),
+            checks.clone(),
+            Arc::new(|_| {}),
+            active.clone(),
+        )
+        .unwrap();
+        let point = (500, 400);
+        show(
+            raw,
+            Open {
+                point,
+                avoid: None,
+                settings: true,
+                tray_anchor: None,
+            },
+        );
+        let state = &mut *(GetWindowLongPtrW(HWND(raw as _), GWLP_USERDATA) as *mut State);
+        state.authorization_return = Some(Open {
+            point,
+            avoid: None,
+            settings: true,
+            tray_anchor: None,
+        });
+        authorization(raw, true);
+        assert!(!native::is_visible(raw));
+        checks.expiring_reset.store(true, Ordering::Relaxed);
+        authorization(raw, false);
+        assert!(native::is_visible(raw));
+        assert!(active.load(Ordering::Acquire));
+        let state = &*(GetWindowLongPtrW(HWND(raw as _), GWLP_USERDATA) as *const State);
+        assert!(state.settings);
+        assert!(state.authorization_return.is_none());
+        assert!(state.checks.expiring_reset.load(Ordering::Relaxed));
+        DestroyWindow(HWND(raw as _)).unwrap();
     }
 }
 pub fn refresh(raw: isize) {
@@ -576,6 +658,9 @@ unsafe extern "system" fn window_proc(
                     state.pressed = -1;
                     let _ = ReleaseCapture();
                     if row >= 0 && row == pressed {
+                        if row == 4 && state.checks.reset_pending.load(Ordering::Acquire) {
+                            return LRESULT(0);
+                        }
                         if row == 1 {
                             state.settings = true;
                             arrange(window, state);
@@ -587,7 +672,15 @@ unsafe extern "system" fn window_proc(
                                 4 => TrayAction::ExpiringReset,
                                 _ => TrayAction::CheckUpdate,
                             };
-                            if row < 3 || row == 4 || row == 5 {
+                            if row == 4 && !state.checks.expiring_reset.load(Ordering::Relaxed) {
+                                state.authorization_return = Some(Open {
+                                    point: state.anchor,
+                                    avoid: state.avoid,
+                                    settings: true,
+                                    tray_anchor: state.tray_anchor,
+                                });
+                            }
+                            if row < 3 || row == 5 {
                                 hide(window, state);
                             }
                             let callback = state.callback.clone();
@@ -631,8 +724,9 @@ unsafe extern "system" fn window_proc(
                 if inside || in_anchor {
                     state.entered |= inside;
                     state.left = None;
-                } else if state.entered
-                    || now.duration_since(state.opened) >= Duration::from_millis(1200)
+                } else if !state.checks.reset_pending.load(Ordering::Acquire)
+                    && (state.entered
+                        || now.duration_since(state.opened) >= Duration::from_millis(1200))
                 {
                     let left = state.left.get_or_insert(now);
                     if now.duration_since(*left) >= Duration::from_millis(300) {
@@ -886,6 +980,9 @@ unsafe fn draw_menu(dc: HDC, state: &State) {
         text(dc, label, label_rect, 13, fg, DT_LEFT, state.dpi);
         if checked == Some(true) {
             text(dc, "✓", label_rect, 16, accent, DT_RIGHT, state.dpi);
+        }
+        if index == 4 && state.checks.reset_pending.load(Ordering::Acquire) {
+            text(dc, "处理中…", label_rect, 10, accent, DT_RIGHT, state.dpi);
         }
         if index == 5 && state.checks.update_available.load(Ordering::Relaxed) {
             let brush = CreateSolidBrush(COLORREF(0x004a4aeb));

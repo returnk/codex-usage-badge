@@ -16,9 +16,9 @@ Keep your remaining quota in view without leaving your work. The badge sits alon
 
 ## Download
 
-**v0.3.4** · Windows 10 / 11 x64 · Release
+**v0.3.5** · Windows 10 / 11 x64 · Release
 
-[**Installer (recommended)**](https://github.com/returnk/codex-usage-badge/releases/download/v0.3.4/Codex.Badge_0.3.4_x64-setup.exe) · [Portable ZIP](https://github.com/returnk/codex-usage-badge/releases/download/v0.3.4/CodexBadge-v0.3.4-windows-x64-portable.zip) · [Release notes](https://github.com/returnk/codex-usage-badge/releases/tag/v0.3.4) · [SHA-256](https://github.com/returnk/codex-usage-badge/releases/download/v0.3.4/SHA256SUMS.txt)
+[**Installer (recommended)**](https://github.com/returnk/codex-usage-badge/releases/download/v0.3.5/Codex.Badge_0.3.5_x64-setup.exe) · [Portable ZIP](https://github.com/returnk/codex-usage-badge/releases/download/v0.3.5/CodexBadge-v0.3.5-windows-x64-portable.zip) · [Release notes](https://github.com/returnk/codex-usage-badge/releases/tag/v0.3.5) · [SHA-256](https://github.com/returnk/codex-usage-badge/releases/download/v0.3.5/SHA256SUMS.txt)
 
 Requires WebView2 Runtime, the signed-in Codex Windows desktop app, and a working Codex CLI. The installer can download WebView2 if needed. No .NET runtime required. The app is unsigned; Windows may show a security warning. Download only from this repository.
 
@@ -38,7 +38,7 @@ Leave Codex Badge running in the background to follow Codex opening and closing.
 | Click **查看** | Show reset-credit expiry details, when available |
 | Mouse wheel | Switch **Glass / System**; System follows Windows light/dark appearance |
 | Drag | Move the badge; each display mode remembers its own position |
-| Right-click | Always-on-top, Settings submenu, or Exit; Settings contains launch at login and system notifications |
+| Right-click | Always-on-top, Settings submenu, or Exit; Settings contains launch at login, expiring-card automation, and Check for updates |
 | Double-click | Restore the default position for the current mode |
 
 Normal mode hides when Codex is minimized. Always-on-top mode remains visible while Codex is minimized. Both modes hide when Codex exits. The current app interface is in Chinese.
@@ -49,11 +49,11 @@ Normal mode hides when Codex is minimized. Always-on-top mode remains visible wh
 - **`--%`?** Check your Codex sign-in and CLI. If the CLI cannot be found, set `CODEX_BADGE_CLI` to the full path of `codex.exe`.
 - **Updating or moving the portable app?** Disable launch at login, exit the running copy, then launch the new copy and re-enable it if needed. When upgrading from v0.2.x, configure your theme and position again.
 
-This update improves hover-triggered quota synchronization, marks cached readings, preserves update errors, and narrows uninstall cleanup. Automated checks and user testing do not establish multi-PC, mixed-DPI, or full install/upgrade acceptance. See the [release notes](../CodexBadge.Tauri/docs/releases/v0.3.4.md).
+This update adds opt-in expiring-card automation, improves rounded edges and account-consent UI, and avoids overlap with client update controls. Automated checks and user testing do not establish multi-PC, mixed-DPI, or full install/upgrade acceptance. See the [release notes](../CodexBadge.Tauri/docs/releases/v0.3.5.md).
 
 ## Privacy and feedback
 
-Reads quota through the local `codex app-server`. It does not read `auth.json`, send model requests, or upload login credentials. Settings and diagnostics stay in `%LOCALAPPDATA%\CodexBadge`.
+Reads quota through the local `codex app-server`; official redemption requests are sent only after explicit account authorization for expiring-card automation. It does not read `auth.json`, send model requests, or upload login credentials. Settings and diagnostics stay in `%LOCALAPPDATA%\CodexBadge`.
 
 [Report an issue](https://github.com/returnk/codex-usage-badge/issues/new/choose) with steps to reproduce, display scaling, and theme. Remove personal information and credentials from screenshots and logs.
 
@@ -61,8 +61,12 @@ Reads quota through the local `codex app-server`. It does not read `auth.json`, 
 
 <sub>Independent open-source tool. Not an official OpenAI product.</sub>
 
-## v0.3.4 updates
+## v0.3.5 updates
 
-Opening the hover panel can refresh older quota data, with throttling to avoid repeated requests. Cached numbers have a subtle pending-update indicator. Update-action errors remain visible across redraws. Uninstall cleanup removes only startup entries belonging to the current installation and this Tauri app's data; upgrades retain settings. Glass and System remain the two theme choices. Installed copies support a user-initiated signed update; portable copies use the release page and manual ZIP replacement. No automatic checks, downloads, or installation. Updater signatures are separate from Windows Authenticode signing. The interface remains Chinese. This is an independent community tool, not an official OpenAI product.
+Expiring-card automation is off by default. After explicit per-account consent, Codex Badge can attempt eligible free-card redemption within 30 minutes of expiry, including future cards, until disabled. Keep the computer and Codex Badge running; the Codex window need not stay open. Shutdown, sleep, or exiting the app stops execution. Success is not guaranteed.
+
+Existing quota is not added to the reset quota, reset times may change, and successful redemption cannot be undone. Do not enable automation for the same account on multiple devices or tools. Disabling stops new requests; an already-sent request cannot be guaranteed canceled. Uncertain results pause automation for review.
+
+Themed consent, immediate loading feedback, compact tooltips, capsule-edge rendering, quota recovery handling, and client-update avoidance are improved. Installed copies support user-initiated signed updates; portable copies use the ZIP. No automatic update checks, downloads, or installation. Updater signatures are separate from Windows Authenticode signing.
 
 If Codex Badge helps your workflow, a Star is appreciated.

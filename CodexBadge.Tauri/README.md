@@ -1,6 +1,6 @@
 # 余量 · Codex Badge — Tauri development
 
-当前产品实现：**Tauri 2 + Rust + 系统 WebView2**。当前本地版本为 **v0.3.5**，尚未上传；当前公开版本为 **v0.3.4**。下载与日常使用见[项目首页](../README.md)；本页面向开发者，记录构建、诊断与验证信息。
+当前产品实现：**Tauri 2 + Rust + 系统 WebView2**。当前版本为 **v0.3.5**。下载与日常使用见[项目首页](../README.md)；本页面向开发者，记录构建、诊断与验证信息。
 
 Tauri 2 + Rust + system WebView2 implementation for Windows 10/11 x64. This directory is independent of the WPF source in `src/CodexBadge`.
 
@@ -12,13 +12,13 @@ Tauri 2 + Rust + system WebView2 implementation for Windows 10/11 x64. This dire
 - Defaults to Glass, with a System theme that follows Windows light/dark appearance. The wheel switches themes. Normal mode uses a compact numeric circle; global mode uses a capsule with a small percent unit. Both modes support drag and double-click position reset.
 - Saves theme, normal anchor-relative DIP offset, independent global work-area position, startup preference and reminder-view deduplication state in `%LOCALAPPDATA%\CodexBadge\tauri-settings.json`. Capsule and tray share a native three-item menu: topmost, Settings submenu, and Exit. Settings contains launch at login, 临期用卡 (a right-side checkmark), and Check for updates. Expiry Windows balloons and their separate notification switch are removed; the capsule dot and card expiry details remain. Native menus and hints use premultiplied-alpha buffered rendering with UpdateLayeredWindow; no WebView cold creation is needed for tray menus.
 - Discovers the new ChatGPT navigation column through visible profile-menu controls and validates cached avatar/column geometry; the old Voice sidebar remains a compatibility path. Normal placement avoids the desktop update action in ready, downloading (including percentage) and installing states, even when its UIA role changes from button to progress bar. Without that action, it centers the 30x30 DIP frame above the avatar with a 10 DIP gap. Global placement uses a 72x34 DIP frame and independent saved position. Window changes remain nonactivating and work-area constrained.
-- All windows are nonactivating tool windows. Normally owned by Codex; **置顶模式** detaches them for global topmost behavior while Codex is running. Minimize hides normal mode and retains global mode. Closing Codex hides the badge in both modes and destroys WebViews after a two-second window-recreation grace period. Without automatic-reset permission, app-server stops and only tray and a lightweight Rust watcher remain; with permission the same quota worker remains available without creating WebViews; reopening Codex recreates the badge automatically. WebViews are not created at login while Codex is absent. A tray menu is created on demand even while waiting.
+- Badge overlays are nonactivating tool windows; user-opened update and authorization windows can take focus. Overlays are normally owned by Codex; **置顶模式** detaches them for global topmost behavior while Codex is running. Minimize hides normal mode and retains global mode. Closing Codex hides the badge in both modes and destroys its WebViews after a two-second window-recreation grace period. Without automatic-reset permission, app-server stops and only tray and a lightweight Rust watcher remain; with permission the same quota worker remains available without creating badge WebViews; reopening Codex recreates the badge automatically. Badge WebViews are not created at login while Codex is absent. A tray menu is created on demand even while waiting.
 
-当前完整功能已统一版本号为 0.3.5。当前交付目录为 `artifacts/release-v0.3.5-unified/packages/`；较早的 `release-v0.3.5/` 和 0.3.6/0.3.7 均为历史本地构建，保留原包和记录，不再作为当前交付。
+当前完整功能统一为 0.3.5。本次发布包来自 `artifacts/release-v0.3.5-ui-polish/packages/`；此前 `release-v0.3.5/`、`release-v0.3.5-unified/` 和 0.3.6/0.3.7 均为历史本地构建，保留原包和记录，不再作为当前交付。
 
-## 临期用卡（本地 v0.3.5）
+## 临期用卡（v0.3.5）
 
-默认关闭，升级不代表授权。在设置中点击“临期用卡”，只读取得当前 ChatGPT 账号后，通过默认选择“否”的对话框确认持续授权；保存成功才勾选。无需逐次确认，初版固定在卡到期前 30 分钟内按条件尝试。电脑正常运行、胶囊驻留即可，不要求 Codex 窗口打开；关机、休眠或退出时不执行，不安装额外服务或计划任务。
+默认关闭，升级不代表授权。在设置中点击“临期用卡”，菜单立即显示处理中；只读取得当前 ChatGPT 账号后，通过同主题授权卡片确认持续授权，默认焦点为“取消”。保存成功才勾选，随后继续后台检查；取消或关闭不会开启，结束后恢复设置菜单。无需逐次确认，固定在卡到期前 30 分钟内按条件尝试。电脑和 CodexBadge 须运行，不要求 Codex 窗口打开；关机、休眠或退出时不执行，不安装额外服务或计划任务。
 
 账号/计划/响应形态不兼容时重新授权；同邮箱账号的执行账本保守归组，重新授权不会清空原卡阶段限制或未决状态。使用显式 creditId，发送前同步写入幂等记录；本机跨进程文件互斥后重新读取记录和账号/额度/卡。原卡到期前不换下一张，成功但额度仍旧也适用。未知结果只在约 60/300 秒复核原卡原键两次，仍未知或已过期就暂停，需核查官方状态；开关不清除该暂停。
 

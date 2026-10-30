@@ -663,7 +663,9 @@ fn place_detail_popup(
     place_popup_at(capsule, size, area, &[capsule], gap, Some(preferred))
 }
 pub fn native_capsule_curve(height: i32) -> i32 {
-    (height - 4).max(1)
+    // The native region is only a coarse corner guard. CSS owns the visible
+    // circle, including fractional-DPI pixels outside an exactly matching arc.
+    (height / 2).max(1)
 }
 pub fn px_to_dip(px: i32, dpi: u32) -> f64 {
     px as f64 * 96.0 / dpi.max(96) as f64

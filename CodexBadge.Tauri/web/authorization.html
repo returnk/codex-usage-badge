@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="style.css"><link rel="stylesheet" href="authorization.css"><title>临期用卡 · 账号授权</title></head>
+<body class="view-authorization"><main class="card authorization-card" role="dialog" aria-modal="true" aria-labelledby="authorization-title">
+<header><strong id="authorization-title">开启临期用卡</strong><button id="authorization-close" aria-label="关闭">×</button></header>
+<div class="authorization-content">
+<section id="authorization-account-box" class="authorization-account"><span class="muted">当前账号</span><div><strong id="authorization-account"></strong><span id="authorization-plan" hidden></span></div></section>
+<section id="authorization-terms">
+<p>在这台电脑上，到期前 30 分钟内，按官方允许的条件自动尝试兑换该账号的免费卡，包含今后获得的卡。</p>
+<p>授权后无需逐次确认，直到你关闭。</p>
+<aside>已有额度不会与重置后的额度叠加。<br>重置时间可能改变，兑换成功后无法撤销。</aside>
+<p>电脑和 CodexBadge 须运行，无需打开 Codex 窗口。<br>关机、休眠或退出后不执行。</p>
+<p>请勿在多个设备或工具同时为同一账号开启。<br>不保证到期前成功。</p>
+</section>
+<p id="authorization-error" role="alert" hidden></p>
+</div>
+<footer><span id="authorization-status" class="muted" aria-live="polite">取消或关闭不会开启</span><div><button id="authorization-cancel" autofocus>取消</button><button id="authorization-accept">授权并开启</button></div></footer>
+</main><script src="authorization.js"></script></body></html>

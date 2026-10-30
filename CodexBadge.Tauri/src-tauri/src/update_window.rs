@@ -86,16 +86,14 @@ pub fn frame(point: (i32, i32), area: domain::Rect, dpi: u32) -> domain::Rect {
     (x, y, w, h)
 }
 fn clip(window: &WebviewWindow) {
-    use windows::Win32::Graphics::Gdi::{CreateRoundRectRgn, DeleteObject, SetWindowRgn, HGDIOBJ};
     if let (Ok(hwnd), Ok(size)) = (window.hwnd(), window.inner_size()) {
-        let radius = domain::dip_to_px(32.0, native::dpi(hwnd.0 as isize));
-        unsafe {
-            let region =
-                CreateRoundRectRgn(0, 0, size.width as i32, size.height as i32, radius, radius);
-            if SetWindowRgn(windows::Win32::Foundation::HWND(hwnd.0), Some(region), true) == 0 {
-                let _ = DeleteObject(HGDIOBJ(region.0));
-            }
-        }
+        let curve = domain::dip_to_px(14.0, native::dpi(hwnd.0 as isize));
+        native::round_surface(
+            hwnd.0 as isize,
+            size.width as i32,
+            size.height as i32,
+            curve,
+        );
     }
 }
 fn ensure_window(app: &AppHandle) -> Result<WebviewWindow, String> {

@@ -50,6 +50,15 @@ fn desktop_preview() {
         .setup(move |app| {
             app.manage(setup_shared.clone());
             app.manage(update_window::Controller::default());
+            app.manage(authorization_window::Controller::default());
+            if std::env::var("BADGE_PREVIEW_AUTHORIZATION").as_deref()==Ok("1") {
+                let handle=app.handle().clone();
+                thread::spawn(move || {
+                    let decision=authorization_window::confirm(&handle,"demo@example.test (PLUS)");
+                    println!("authorization_preview decision={decision:?}; no permit saved, no RPC sent");
+                    authorization_window::finish(&handle,None);
+                });
+            }
             // A normal owner window makes nonactivating tool windows visible to
             // desktop inspection tools and supplies a reproducible blur target.
             let background = r#"<!doctype html><meta charset="utf-8"><style>
@@ -177,8 +186,13 @@ fn desktop_preview() {
                             m.detail_session = 1;
                         }
                         if m.ready[0] {
-                            resize_move(&a, "capsule", m.windows[0], 600, 390, p(72.0), p(34.0));
-                            native::round_capsule(m.windows[0], p(72.0), p(34.0));
+                            let (w,h)=if std::env::var("BADGE_PREVIEW_ROUND").as_deref()==Ok("1") {
+                                m.settings.always_on_top=false;
+                                let _=a.emit("state-updated",());
+                                (p(28.8),p(28.8))
+                            } else {(p(72.0),p(34.0))};
+                            resize_move(&a, "capsule", m.windows[0], 600, 390, w, h);
+                            native::round_capsule(m.windows[0], w, h);
                             native::show(m.windows[0]);
                             m.capsule_visible = true;
                         }
@@ -215,6 +229,9 @@ fn desktop_preview() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            authorization_window::get_authorization_state,
+            authorization_window::authorization_ready,
+            authorization_window::answer_authorization,
             get_state,
             window_ready,
             report_detail_height,

@@ -15,6 +15,7 @@ const ICON_MESSAGE: u32 = WM_APP + 41;
 const ICON_ID: u32 = 1;
 const OPEN_POPUP: u32 = WM_APP + 42;
 const REFRESH_POPUP: u32 = WM_APP + 43;
+const AUTHORIZATION_POPUP: u32 = WM_APP + 44;
 static CLASS_ID: AtomicUsize = AtomicUsize::new(0);
 
 #[derive(Clone, Copy, Debug)]
@@ -31,6 +32,7 @@ pub(crate) struct Checks {
     pub startup: AtomicBool,
     pub topmost: AtomicBool,
     pub expiring_reset: AtomicBool,
+    pub reset_pending: AtomicBool,
     pub reset_details: Mutex<Vec<String>>,
     pub palette: AtomicUsize,
     pub update_available: AtomicBool,
@@ -84,6 +86,24 @@ impl TrayHandle {
 
     pub fn reset_details(&self, lines: Vec<String>) {
         *self.0.checks.reset_details.lock().unwrap() = lines;
+    }
+
+    pub fn reset_pending(&self, pending: bool) {
+        self.0
+            .checks
+            .reset_pending
+            .store(pending, Ordering::Release);
+    }
+
+    pub fn authorization(&self, suspend: bool) {
+        unsafe {
+            let _ = PostMessageW(
+                Some(HWND(self.0.hwnd as _)),
+                AUTHORIZATION_POPUP,
+                WPARAM(suspend as usize),
+                LPARAM(0),
+            );
+        }
     }
 
     pub fn open(&self, point: (i32, i32), avoid: Option<crate::domain::Rect>, settings: bool) {
@@ -377,6 +397,10 @@ unsafe extern "system" fn window_proc(
             }
             REFRESH_POPUP => {
                 crate::popup::refresh(state.popup);
+                return LRESULT(0);
+            }
+            AUTHORIZATION_POPUP => {
+                crate::popup::authorization(state.popup, wparam.0 != 0);
                 return LRESULT(0);
             }
             WM_CLOSE => {
