@@ -59,6 +59,9 @@ fn sanitize_event(event: &str) -> String {
             | "app_server_stderr"
             | "quota_rpc"
             | "quota_snapshot"
+            | "auto_reset_result"
+            | "auto_reset_notice"
+            | "auto_reset_record_failed"
             | "popup_no_space"
             | "frame_slow"
             | "reminder_save_failed"
@@ -179,6 +182,8 @@ fn sanitize_event(event: &str) -> String {
                 | "initialize"
                 | "account/read"
                 | "account/rateLimits/read"
+                | "account/rateLimitResetCredit/consume"
+                | "nothing"
                 | "service"
                 | "authentication"
                 | "timeout"
@@ -378,6 +383,16 @@ mod tests {
             "window_create_failed label=detail code=-5 duration_ms=42"
         );
         assert_eq!(sanitize_event("SECRET_TOKEN token=123"), "invalid_event");
+    }
+
+    #[test]
+    fn automatic_reset_logs_only_outcome_and_opaque_correlation() {
+        assert_eq!(sanitize_event("auto_reset_result state=success correlation=42 creditId=secret-card idempotencyKey=secret-key email=one@example.test"),
+            "auto_reset_result state=success correlation=42");
+        assert_eq!(
+            sanitize_event("auto_reset_record_failed state=paused path=C:\\private"),
+            "auto_reset_record_failed state=paused"
+        );
     }
 
     #[test]

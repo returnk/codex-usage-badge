@@ -893,6 +893,9 @@ Section Uninstall
     ; CodexBadge is shared with the older WPF app; remove only Tauri-owned files.
     Delete "$LOCALAPPDATA\CodexBadge\tauri-settings.json"
     Delete "$LOCALAPPDATA\CodexBadge\tauri-settings.json.tmp"
+    Delete "$LOCALAPPDATA\CodexBadge\expiring-reset.json"
+    Delete "$LOCALAPPDATA\CodexBadge\expiring-reset.tmp"
+    Delete "$LOCALAPPDATA\CodexBadge\expiring-reset.lock"
     Delete "$LOCALAPPDATA\CodexBadge\tauri-update-notice.json"
     Delete "$LOCALAPPDATA\CodexBadge\tauri-update-notice.json.tmp"
     Delete "$LOCALAPPDATA\CodexBadge\tauri-diagnostics.log"

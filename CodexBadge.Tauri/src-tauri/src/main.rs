@@ -6,6 +6,7 @@ mod celebration;
 mod celebration_window;
 mod diagnostics;
 mod domain;
+mod expiring_reset;
 mod input;
 mod native;
 mod popup;
@@ -31,9 +32,15 @@ struct Shared {
     quota_active: AtomicBool,
     quota_generation: AtomicU64,
     quota_refresh: AtomicBool,
+    reset_background: AtomicBool,
+    reset_authorize: AtomicBool,
+    reset_stopped: AtomicBool,
+    reset_send_gate: Mutex<()>,
 }
 
 struct Model {
+    reset_view: expiring_reset::View,
+    reset_scope: Option<String>,
     celebration_overlay: celebration_window::Overlay,
     account_key: Option<u64>,
     quota_account: Option<u64>,
@@ -100,6 +107,8 @@ struct Model {
 impl Default for Model {
     fn default() -> Self {
         Self {
+            reset_view: Default::default(),
+            reset_scope: None,
             celebration_overlay: Default::default(),
             account_key: None,
             quota_account: None,
@@ -851,7 +860,12 @@ fn track_badge_frame(shared: &Arc<Shared>, app: &AppHandle) {
     }
     let (retain, display) =
         domain::host_policy(m.host, m.settings.always_on_top, m.absent_since, now);
-    if shared.quota_active.swap(retain, Ordering::AcqRel) != retain {
+    let quota_retain = retain_quota(
+        retain,
+        shared.reset_background.load(Ordering::Acquire),
+        shared.reset_authorize.load(Ordering::Acquire),
+    );
+    if shared.quota_active.swap(quota_retain, Ordering::AcqRel) != quota_retain {
         shared.quota_generation.fetch_add(1, Ordering::AcqRel);
     }
     let focus = native::focus_observation();
@@ -1421,7 +1435,9 @@ fn state_value(m: &mut Model) -> Value {
         "quotaMode": m.quota_mode,
         "planLabel": m.plan_label,
         "countdown": reminders::countdown(five.or(weekly).and_then(|w| w.resets_at), epoch_now()),
-        "notificationsEnabled": m.settings.notifications_enabled,
+        "expiringResetEnabled": m.reset_view.enabled,
+        "expiringResetStatus": m.reset_view.status,
+        "expiringResetLast": m.reset_view.last,
         "updatedAt": reminders::updated_at(m.snapshot.as_ref().map(|s| s.fetched_at)),
         "theme": m.settings.theme,
         "capsule": domain::capsule_text(remaining),
@@ -1691,10 +1707,13 @@ fn change_topmost(state: &Arc<Shared>, app: &AppHandle) -> Result<bool, String> 
 
 fn sync_tray(app: &AppHandle, settings: &Settings) {
     if let Some(tray) = app.try_state::<tray::TrayHandle>() {
+        let shared = app.state::<Arc<Shared>>();
+        let reset = shared.inner.lock().unwrap().reset_view.clone();
+        tray.reset_details(reset.hint_lines());
         tray.sync(
             settings.start_with_windows,
             settings.always_on_top,
-            settings.notifications_enabled,
+            reset.enabled,
             popup_palette(settings),
             update_window::notice(app),
         );
@@ -1709,60 +1728,43 @@ fn popup_palette(settings: &Settings) -> usize {
     }
 }
 
-#[tauri::command]
-fn toggle_notifications(state: State<'_, Arc<Shared>>, app: AppHandle) -> Result<bool, String> {
-    change_notifications(state.inner(), &app)
+fn retain_quota(host: bool, authorized: bool, authorizing: bool) -> bool {
+    host || authorized || authorizing
 }
 
-fn change_notifications(state: &Arc<Shared>, app: &AppHandle) -> Result<bool, String> {
-    let mut m = state.inner.lock().unwrap();
-    let previous = m.settings.notifications_enabled;
-    m.settings.notifications_enabled = !previous;
-    if let Err(error) = settings::save(&m.settings) {
-        m.settings.notifications_enabled = previous;
-        return Err(error);
-    }
-    drop(m);
-    let settings = state.inner.lock().unwrap().settings.clone();
-    sync_tray(app, &settings);
-    deliver_reminder(state, app);
-    let _ = app.emit("state-updated", ());
-    Ok(!previous)
-}
-
-fn deliver_reminder(shared: &Arc<Shared>, app: &AppHandle) {
-    let mut m = shared.inner.lock().unwrap();
-    let fresh = domain::quota_freshness(
-        m.snapshot.as_ref().map(|s| s.fetched_at),
-        m.quota_failed,
-        epoch_now(),
-    ) == "fresh";
-    let mut next = m.settings.reminder_state.clone();
-    let Some(message) = next.observe(
-        m.snapshot.as_ref(),
-        fresh,
-        m.settings.notifications_enabled,
-        epoch_now(),
-    ) else {
-        return;
+fn change_expiring_reset(shared: &Arc<Shared>, app: &AppHandle) {
+    let (enabled, scope) = {
+        let m = shared.inner.lock().unwrap();
+        (m.reset_view.enabled, m.reset_scope.clone())
     };
-    let previous = m.settings.reminder_state.clone();
-    m.settings.reminder_state = next;
-    if settings::save(&m.settings).is_err() {
-        m.settings.reminder_state = previous;
-        diagnostics::record("reminder_save_failed");
-        return;
+    if enabled {
+        // Synchronize only the send boundary, never hold this gate for a reply.
+        {
+            let _gate = shared.reset_send_gate.lock().unwrap();
+            shared.reset_stopped.store(true, Ordering::Release);
+        }
+        shared.reset_authorize.store(false, Ordering::Release);
+        let result = scope
+            .ok_or_else(|| "当前账号尚未确认".to_string())
+            .and_then(|scope| expiring_reset::Store::local()?.set_enabled(&scope, false));
+        let mut m = shared.inner.lock().unwrap();
+        m.reset_view.enabled = result.is_err();
+        m.reset_view.status = match &result {
+            Ok(()) => "已关闭；此前未决请求需核查官方状态".into(),
+            Err(_) => "本会话已停止，关闭未保存；请稍后重试关闭".into(),
+        };
+        drop(m);
+        if result.is_err() {
+            expiring_reset::show_error("本会话已停止新兑换，但未能保存关闭状态。请在在途请求结束后重试；重启可能恢复原授权。已发送请求仍会核实结果。");
+        }
+    } else if !shared.reset_authorize.swap(true, Ordering::AcqRel) {
+        shared.reset_background.store(true, Ordering::Release);
+        shared.inner.lock().unwrap().reset_view.status = "正在读取当前账号以确认授权".into();
     }
-    let submitted = app
-        .try_state::<tray::TrayHandle>()
-        .is_some_and(|tray| tray.notify(&message).is_ok());
-    if submitted {
-        diagnostics::record("reminder_submitted");
-    } else {
-        m.settings.reminder_state = previous;
-        let _ = settings::save(&m.settings);
-        diagnostics::record("reminder_delivery_failed");
-    }
+    shared.quota_refresh.store(true, Ordering::Release);
+    let settings = shared.inner.lock().unwrap().settings.clone();
+    sync_tray(app, &settings);
+    let _ = app.emit("state-updated", ());
 }
 
 #[tauri::command]
@@ -1973,6 +1975,13 @@ fn main() {
                 }
             }
             app.manage(shared.clone());
+            match expiring_reset::Store::local().and_then(|s| s.background()) {
+                Ok(background) => shared.reset_background.store(background, Ordering::Release),
+                Err(error) => {
+                    shared.reset_stopped.store(true, Ordering::Release);
+                    shared.inner.lock().unwrap().reset_view.status = error;
+                }
+            }
             app.manage(update_window::Controller::load());
             let handle = app.handle().clone();
             let tray_shared = shared.clone();
@@ -1986,8 +1995,8 @@ fn main() {
                     tray::TrayAction::Topmost => {
                         let _ = change_topmost(&shared, &callback_app);
                     }
-                    tray::TrayAction::Notifications => {
-                        let _ = change_notifications(&shared, &callback_app);
+                    tray::TrayAction::ExpiringReset => {
+                        change_expiring_reset(&shared, &callback_app);
                     }
                     tray::TrayAction::CheckUpdate => {
                         if let Err(error) = update_window::open(&callback_app) {
@@ -2003,7 +2012,7 @@ fn main() {
                 native_tray.sync(
                     m.settings.start_with_windows,
                     m.settings.always_on_top,
-                    m.settings.notifications_enabled,
+                    m.reset_view.enabled,
                     popup_palette(&m.settings),
                     update_window::notice(app.handle()),
                 );
@@ -2046,7 +2055,6 @@ fn main() {
             cycle_theme,
             reset_position,
             toggle_startup,
-            toggle_notifications,
             toggle_topmost,
             hide_menu,
             exit_app,
@@ -2074,6 +2082,20 @@ fn main() {
 #[cfg(test)]
 mod stability_tests {
     use super::*;
+    #[test]
+    fn reset_background_retains_worker_without_retaining_host_webviews() {
+        let (retain, display) = domain::host_policy(
+            domain::HostObservation::default(),
+            false,
+            None,
+            Instant::now(),
+        );
+        assert!(!retain && !display);
+        assert!(!retain_quota(retain, false, false));
+        assert!(retain_quota(retain, true, false));
+        assert!(retain_quota(retain, false, true));
+        assert!(!display);
+    }
     #[test]
     fn hover_refreshes_old_or_failed_readings_but_not_recent_success() {
         let at = Instant::now();

@@ -176,59 +176,59 @@ unsafe extern "system" fn hint_proc(
     }
     DefWindowProcW(window, message, wparam, lparam)
 }
-const NOTIFICATION_HINT: [&str; 2] = [
-    "重置卡临近过期时显示 Windows 通知。",
-    "关闭系统通知不影响胶囊的有限次提醒。",
-];
+fn reset_hint(checks: &Checks) -> Vec<String> {
+    let lines = checks.reset_details.lock().unwrap().clone();
+    if lines.is_empty() {
+        crate::expiring_reset::View::default().hint_lines()
+    } else {
+        lines
+    }
+}
 
-unsafe fn hint_layout(dpi: u32) -> ((i32, i32), [RECT; 2]) {
+unsafe fn hint_layout(dpi: u32, lines: &[String]) -> ((i32, i32), Vec<RECT>) {
     let p = |v| domain::dip_to_px(v, dpi);
     let dc = CreateCompatibleDC(None);
     let font = text_font(11, dpi);
     let previous = SelectObject(dc, HGDIOBJ(font.0));
-    let mut metrics = SIZE::default();
-    let mut width = 0;
-    let mut height = 0;
-    for line in NOTIFICATION_HINT {
-        let value: Vec<u16> = line.encode_utf16().collect();
-        let _ = GetTextExtentPoint32W(dc, &value, &mut metrics);
-        width = width.max(metrics.cx);
-        height = height.max(metrics.cy);
+    let width = p(310.0);
+    let pad_x = p(12.0);
+    let pad_y = p(8.0);
+    let gap = p(4.0);
+    let mut top = pad_y;
+    let mut rows = Vec::new();
+    for line in lines {
+        let mut value: Vec<u16> = line.encode_utf16().collect();
+        let mut row = RECT {
+            left: 0,
+            top: 0,
+            right: width,
+            bottom: 0,
+        };
+        DrawTextW(
+            dc,
+            &mut value,
+            &mut row,
+            DT_CALCRECT | DT_WORDBREAK | DT_NOPREFIX,
+        );
+        let height = (row.bottom - row.top).max(p(16.0));
+        rows.push(RECT {
+            left: pad_x,
+            top,
+            right: pad_x + width,
+            bottom: top + height,
+        });
+        top += height + gap;
     }
     SelectObject(dc, previous);
     let _ = DeleteObject(HGDIOBJ(font.0));
     let _ = DeleteDC(dc);
-    if width <= 0 || height <= 0 {
-        width = p(246.0);
-        height = p(16.0);
-    }
-    let pad_x = p(12.0);
-    let pad_y = p(8.0);
-    let gap = p(2.0);
-    let w = width + pad_x * 2;
-    let h = height * 2 + pad_y * 2 + gap;
-    (
-        (w, h),
-        [
-            RECT {
-                left: pad_x,
-                top: pad_y,
-                right: w - pad_x,
-                bottom: pad_y + height,
-            },
-            RECT {
-                left: pad_x,
-                top: pad_y + height + gap,
-                right: w - pad_x,
-                bottom: h - pad_y,
-            },
-        ],
-    )
+    ((width + pad_x * 2, top - gap + pad_y), rows)
 }
 
 unsafe fn paint_hint(window: HWND, state: &HintState, position: (i32, i32)) -> bool {
     let p = |v: f64| domain::dip_to_px(v, state.dpi);
-    let (size, rows) = hint_layout(state.dpi);
+    let lines = reset_hint(&state.checks);
+    let (size, rows) = hint_layout(state.dpi, &lines);
     render_layer(
         window,
         position,
@@ -246,24 +246,21 @@ unsafe fn paint_hint(window: HWND, state: &HintState, position: (i32, i32)) -> b
             let mode = state.checks.palette.load(Ordering::Relaxed);
             let dark = mode == 2;
             let fg = COLORREF(if dark { 0x00b8afa8 } else { 0x00887766 });
-            text(
-                dc,
-                NOTIFICATION_HINT[0],
-                rows[0],
-                11,
-                fg,
-                DT_LEFT,
-                state.dpi,
-            );
-            text(
-                dc,
-                NOTIFICATION_HINT[1],
-                rows[1],
-                11,
-                fg,
-                DT_LEFT,
-                state.dpi,
-            );
+            let font = text_font(11, state.dpi);
+            let old = SelectObject(dc, HGDIOBJ(font.0));
+            SetBkMode(dc, TRANSPARENT);
+            SetTextColor(dc, fg);
+            for (line, mut row) in lines.iter().zip(rows) {
+                let mut value: Vec<u16> = line.encode_utf16().collect();
+                DrawTextW(
+                    dc,
+                    &mut value,
+                    &mut row,
+                    DT_LEFT | DT_WORDBREAK | DT_NOPREFIX,
+                );
+            }
+            SelectObject(dc, old);
+            let _ = DeleteObject(HGDIOBJ(font.0));
         },
     )
 }
@@ -283,7 +280,7 @@ unsafe fn tip(window: HWND, state: &mut State, show: bool) {
         return;
     };
     let p = |v: f64| domain::dip_to_px(v, state.dpi);
-    let ((width, height), _) = hint_layout(state.dpi);
+    let ((width, height), _) = hint_layout(state.dpi, &reset_hint(&state.checks));
     let gap = p(6.0);
     let x = if state.left_submenu {
         rect.left
@@ -333,7 +330,14 @@ pub fn show(raw: isize, open: Open) {
 }
 pub fn refresh(raw: isize) {
     unsafe {
-        let _ = InvalidateRect(Some(HWND(raw as _)), None, false);
+        let window = HWND(raw as _);
+        let _ = InvalidateRect(Some(window), None, false);
+        if let Some(state) = (GetWindowLongPtrW(window, GWLP_USERDATA) as *mut State).as_mut() {
+            if state.tooltip_shown {
+                tip(window, state, false);
+                tip(window, state, true);
+            }
+        }
     }
 }
 #[cfg(test)]
@@ -580,10 +584,10 @@ unsafe extern "system" fn window_proc(
                                 0 => TrayAction::Topmost,
                                 2 => TrayAction::Exit,
                                 3 => TrayAction::Startup,
-                                4 => TrayAction::Notifications,
+                                4 => TrayAction::ExpiringReset,
                                 _ => TrayAction::CheckUpdate,
                             };
-                            if row < 3 || row == 5 {
+                            if row < 3 || row == 4 || row == 5 {
                                 hide(window, state);
                             }
                             let callback = state.callback.clone();
@@ -852,8 +856,8 @@ unsafe fn draw_menu(dc: HDC, state: &State) {
             (
                 4,
                 rect(child + 8.0, 38.0, 164.0, 28.0),
-                "系统通知",
-                Some(state.checks.notifications.load(Ordering::Relaxed)),
+                "临期用卡",
+                Some(state.checks.expiring_reset.load(Ordering::Relaxed)),
             ),
             (5, rect(child + 8.0, 68.0, 164.0, 28.0), "检查更新", None),
         ]);
@@ -1037,17 +1041,23 @@ mod tests {
         assert_eq!(super::hit(false, 20.0, 70.0), -1);
     }
     #[test]
-    fn notification_hint_fits_its_short_copy_and_has_even_line_box_padding() {
+    fn reset_hint_wraps_result_at_each_dpi_with_even_padding() {
+        let view = crate::expiring_reset::View {
+            status: "自动用卡暂停，请核查最近结果".into(),
+            last: "10/30 19:20 兑换结果仍无法确认，已暂停自动用卡；请到官方页面核查".into(),
+            ..Default::default()
+        };
+        let lines = view.hint_lines();
         for dpi in [96, 120, 144, 168, 192] {
-            let ((w, h), rows) = unsafe { super::hint_layout(dpi) };
-            assert!(
-                w < crate::domain::dip_to_px(260.0, dpi),
-                "old copy left too much space at dpi={dpi}"
-            );
+            let ((w, h), rows) = unsafe { super::hint_layout(dpi, &lines) };
+            assert_eq!(rows.len(), 4);
+            assert!(w <= crate::domain::dip_to_px(335.0, dpi));
             assert_eq!(rows[0].left, w - rows[0].right);
-            assert_eq!(rows[0].top, h - rows[1].bottom);
-            assert_eq!(rows[0].bottom - rows[0].top, rows[1].bottom - rows[1].top);
-            assert!(rows[1].top > rows[0].bottom);
+            assert_eq!(rows[0].top, h - rows[3].bottom);
+            for pair in rows.windows(2) {
+                assert!(pair[1].top > pair[0].bottom);
+            }
+            assert!(rows[3].bottom - rows[3].top > rows[0].bottom - rows[0].top);
         }
     }
     use super::*;

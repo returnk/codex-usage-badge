@@ -1,4 +1,4 @@
-use crate::{diagnostics, domain, Shared};
+use crate::{diagnostics, domain, expiring_reset, Shared};
 use serde_json::{json, Value};
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
@@ -10,7 +10,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 use windows::Win32::Foundation::{CloseHandle, HANDLE};
 use windows::Win32::System::JobObjects::{
     AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
@@ -196,7 +196,13 @@ impl Server {
     fn request_inner(&mut self, method: &str, params: Value) -> Result<Value, String> {
         self.next_id += 1;
         let id = self.next_id;
-        self.send(&json!({"id":id,"method":method,"params":params}))?;
+        let message = json!({"id":id,"method":method,"params":params});
+        if method == expiring_reset::CONSUME {
+            let shared = self.shared.clone();
+            with_reset_send_permission(&shared, self.generation, || self.send(&message))?;
+        } else {
+            self.send(&message)?;
+        }
         let deadline =
             Instant::now() + Duration::from_secs(if method == "initialize" { 10 } else { 30 });
         receive_response(
@@ -223,6 +229,126 @@ impl Server {
                 })),
             Err(mpsc::RecvTimeoutError::Timeout) => Ok(false),
             Err(_) => Err("app-server output closed".into()),
+        }
+    }
+}
+
+impl expiring_reset::Rpc for Server {
+    fn request(&mut self, method: &str, params: Value) -> Result<Value, String> {
+        Server::request(self, method, params)
+    }
+    fn current_time(&self) -> i64 {
+        now()
+    }
+}
+
+fn with_reset_send_permission(
+    shared: &Shared,
+    generation: u64,
+    send: impl FnOnce() -> Result<(), String>,
+) -> Result<(), String> {
+    let _gate = shared.reset_send_gate.lock().unwrap();
+    if shared.reset_stopped.load(Ordering::Acquire)
+        || !shared.quota_active.load(Ordering::Acquire)
+        || shared.quota_generation.load(Ordering::Acquire) != generation
+    {
+        return Err("automatic redemption disabled before send".into());
+    }
+    send()
+}
+
+fn apply_reset_model(m: &mut crate::Model, mut view: expiring_reset::View, scope: Option<String>) {
+    if let Some(snapshot) = view.snapshot.take() {
+        m.quota_mode = domain::quota_mode(Some(&snapshot)).into();
+        m.snapshot = Some(snapshot);
+    }
+    m.reset_view = view;
+    m.reset_scope = scope;
+}
+
+fn publish_reset(
+    shared: &Shared,
+    app: &AppHandle,
+    view: expiring_reset::View,
+    scope: Option<String>,
+) {
+    shared
+        .reset_background
+        .store(view.background, Ordering::Release);
+    let notification = view.notification.clone();
+    let settings = {
+        let mut m = shared.inner.lock().unwrap();
+        apply_reset_model(&mut m, view, scope);
+        m.settings.clone()
+    };
+    crate::sync_tray(app, &settings);
+    if let Some(message) = notification {
+        let accepted = app
+            .try_state::<crate::tray::TrayHandle>()
+            .is_some_and(|tray| tray.notify(&message).is_ok());
+        diagnostics::record(format!("auto_reset_notice accepted={accepted}"));
+    }
+    let _ = app.emit("state-updated", ());
+}
+
+fn run_expiring_reset(
+    server: &mut Server,
+    shared: &Arc<Shared>,
+    app: &AppHandle,
+    account: &Value,
+    limits: &Value,
+) {
+    let result = (|| -> Result<(expiring_reset::View, Option<String>), String> {
+        let store = expiring_reset::Store::local()?;
+        let Some(sample) = expiring_reset::Sample::new(account.clone(), limits.clone(), now())
+        else {
+            return Err("账号、登录类型或计划尚不适用，自动用卡暂停".into());
+        };
+        if shared.reset_authorize.load(Ordering::Acquire) {
+            let accepted = expiring_reset::confirm_authorization(&sample.label);
+            if expiring_reset::authorize(&store, server, &sample, accepted, now())? {
+                shared.reset_background.store(true, Ordering::Release);
+                shared.reset_stopped.store(false, Ordering::Release);
+            }
+            shared.reset_authorize.store(false, Ordering::Release);
+        }
+        let mut view = expiring_reset::process(
+            &store,
+            server,
+            &sample,
+            &|| !shared.reset_stopped.load(Ordering::Acquire),
+            now(),
+        )?;
+        if shared.reset_stopped.load(Ordering::Acquire) && view.enabled {
+            view.status = "本会话已停止；关闭未保存，请再次点击关闭".into();
+        }
+        Ok((view, Some(sample.scope)))
+    })();
+    match result {
+        Ok((view, scope)) => publish_reset(shared, app, view, scope),
+        Err(error) => {
+            if shared.reset_authorize.swap(false, Ordering::AcqRel) {
+                expiring_reset::show_error(&error);
+            }
+            let record_failed = error.contains("执行记录");
+            if record_failed {
+                shared.reset_stopped.store(true, Ordering::Release);
+                diagnostics::record("auto_reset_record_failed state=paused");
+            }
+            let mut view = shared.inner.lock().unwrap().reset_view.clone();
+            let notify_fault = record_failed
+                && view.status != error
+                && shared.reset_background.load(Ordering::Acquire);
+            view.enabled = false;
+            view.status = error;
+            view.background = shared.reset_background.load(Ordering::Acquire);
+            if let Ok(background) = expiring_reset::Store::local().and_then(|s| s.background()) {
+                view.background = background;
+            }
+            view.notification = notify_fault
+                .then(|| "自动用卡已暂停：执行记录无法安全读取或保存，请核查本地记录。".into());
+            view.snapshot = None;
+            publish_reset(shared, app, view, None);
         }
     }
 }
@@ -393,7 +519,7 @@ pub fn run(shared: Arc<Shared>, app: AppHandle) {
                             m.quota_status.clear();
                         }
                         let _ = app.emit("state-updated", ());
-                        crate::deliver_reminder(&shared, &app);
+                        run_expiring_reset(&mut server, &shared, &app, &account, &value);
                         failures = 0;
                         let read_delay = shared
                             .inner
@@ -448,6 +574,10 @@ fn account_identity(account: &Value) -> u64 {
 
 fn select_account(m: &mut crate::Model, identity: u64) {
     if m.quota_account != Some(identity) {
+        m.reset_view.enabled = false;
+        m.reset_view.status = "正在核实当前账号授权".into();
+        m.reset_view.last.clear();
+        m.reset_scope = None;
         if m.quota_account.is_some() {
             m.settings.reminder_state = Default::default();
         }
@@ -467,6 +597,9 @@ fn select_account(m: &mut crate::Model, identity: u64) {
 
 fn invalidate_account(shared: &Shared) {
     let mut m = shared.inner.lock().unwrap();
+    m.reset_view.enabled = false;
+    m.reset_view.status = "需登录或账号不匹配，自动用卡暂停".into();
+    m.reset_scope = None;
     m.snapshot = None;
     m.plan_label = None;
     m.account_key = None;
@@ -496,6 +629,9 @@ fn fail(shared: &Shared, app: &AppHandle, error: &str) {
     {
         let mut m = shared.inner.lock().unwrap();
         m.quota_failed = true;
+        m.reset_view.enabled = false;
+        m.reset_view.status = "额度服务不可用，自动用卡暂停".into();
+        m.reset_scope = None;
         m.settings.celebration_state.interrupt();
         #[cfg(not(test))]
         if crate::settings::save(&m.settings).is_err() {
@@ -504,6 +640,8 @@ fn fail(shared: &Shared, app: &AppHandle, error: &str) {
         m.account_key = None;
         m.quota_status = status.into();
     }
+    let settings = shared.inner.lock().unwrap().settings.clone();
+    crate::sync_tray(app, &settings);
     let _ = app.emit("state-updated", ());
 }
 
@@ -575,6 +713,53 @@ pub(crate) fn live_readonly_sample() -> Result<(Option<String>, domain::Snapshot
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn reset_send_gate_checks_stop_and_does_not_lock_during_reply() {
+        let shared = Shared::default();
+        shared.quota_active.store(true, Ordering::Release);
+        shared.reset_stopped.store(true, Ordering::Release);
+        assert!(with_reset_send_permission(&shared, 0, || panic!("must not send")).is_err());
+        shared.reset_stopped.store(false, Ordering::Release);
+        let mut sent = false;
+        with_reset_send_permission(&shared, 0, || {
+            sent = true;
+            Ok(())
+        })
+        .unwrap();
+        assert!(sent);
+        assert!(shared.reset_send_gate.try_lock().is_ok());
+        shared.quota_generation.store(1, Ordering::Release);
+        assert!(
+            with_reset_send_permission(&shared, 0, || panic!("stale session must not send"))
+                .is_err()
+        );
+    }
+    #[test]
+    fn reset_view_does_not_retain_a_snapshot_that_can_overwrite_later_account_data() {
+        let mut model = crate::Model::default();
+        let old = domain::parse_quota(
+            &json!({"rateLimits":{"primary":{"usedPercent":50,"windowDurationMins":300}}}),
+            10000,
+        );
+        let fresh = domain::parse_quota(
+            &json!({"rateLimits":{"primary":{"usedPercent":70,"windowDurationMins":300}}}),
+            10100,
+        );
+        apply_reset_model(
+            &mut model,
+            expiring_reset::View {
+                snapshot: Some(old),
+                ..Default::default()
+            },
+            Some("one".into()),
+        );
+        assert!(model.reset_view.snapshot.is_none());
+        model.snapshot = Some(fresh.clone());
+        let mut error = model.reset_view.clone();
+        error.status = "复核失败".into();
+        apply_reset_model(&mut model, error, None);
+        assert_eq!(model.snapshot, Some(fresh));
+    }
     #[test]
     fn account_switch_discards_quota_and_unavailable_identity_keeps_last_mode_only() {
         let shared = Shared::default();

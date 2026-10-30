@@ -51,8 +51,6 @@ pub struct Settings {
     #[serde(default)]
     pub always_on_top: bool,
     #[serde(default)]
-    pub notifications_enabled: bool,
-    #[serde(default)]
     pub reminder_state: crate::reminders::ReminderTracker,
     #[serde(
         default = "crate::celebration::CelebrationState::existing_install",
@@ -125,7 +123,6 @@ impl Default for Settings {
             offset_y: 0.0,
             start_with_windows: false,
             always_on_top: false,
-            notifications_enabled: false,
             reminder_state: Default::default(),
             celebration_state: Default::default(),
             global_position: None,

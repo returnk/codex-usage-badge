@@ -1,5 +1,5 @@
 param(
-    [ValidateSet('Observe','FocusHost','Capsule','Detail','CreditButton','CreditHover','Credit','Leave','Menu','Topmost','Settings','SettingsHover','NotificationHover','CloseSettings','Startup','DoubleClick','Notifications','Sidebar','ResizeSidebar','DragCapsule','RapidHover','Move','RestoreGeometry','Maximize','Restore','Minimize')]
+    [ValidateSet('Observe','FocusHost','Capsule','Detail','CreditButton','CreditHover','Credit','Leave','Menu','Topmost','Settings','SettingsHover','ExpiringResetHover','CloseSettings','Startup','DoubleClick','ExpiringReset','Sidebar','ResizeSidebar','DragCapsule','RapidHover','Move','RestoreGeometry','Maximize','Restore','Minimize')]
     [string]$Action = 'Observe',
     [string]$Capture,
     [int]$CaptureWidth = 680,
@@ -114,7 +114,7 @@ switch ($Action) {
     }
     Settings { Click-Popup 'Codex Badge Menu' 80 58 }
     SettingsHover { $r=@($taskWindows|Where-Object {$_.Title -eq 'Codex Badge Menu' -and $_.Visible})[0];[void][AvatarLayoutDesktop]::SetCursorPos($r.X+[int](80*$r.Dpi/96),$r.Y+[int](58*$r.Dpi/96)) }
-    NotificationHover { $r=@($taskWindows|Where-Object {$_.Title -eq 'Codex Badge Menu' -and $_.Visible})[0];$x=if($SubmenuSide -eq 'Right'){264}else{80};[void][AvatarLayoutDesktop]::SetCursorPos($r.X+[int]($x*$r.Dpi/96),$r.Y+[int](92*$r.Dpi/96)) }
+    ExpiringResetHover { $r=@($taskWindows|Where-Object {$_.Title -eq 'Codex Badge Menu' -and $_.Visible})[0];$x=if($SubmenuSide -eq 'Right'){264}else{80};[void][AvatarLayoutDesktop]::SetCursorPos($r.X+[int]($x*$r.Dpi/96),$r.Y+[int](92*$r.Dpi/96)) }
     CloseSettings { $r=@($taskWindows|Where-Object {$_.Title -eq 'Codex Badge Menu' -and $_.Visible})[0];[void][AvatarLayoutDesktop]::PostMessage([IntPtr]$r.Hwnd,16,[IntPtr]::Zero,[IntPtr]::Zero) }
     Startup { $x=if($SubmenuSide -eq 'Right'){264}else{80};Click-Popup 'Codex Badge Menu' $x 58 }
     DoubleClick {
@@ -125,7 +125,7 @@ switch ($Action) {
             Start-Sleep -Milliseconds 80
         }
     }
-    Notifications {
+    ExpiringReset {
         $x=if($SubmenuSide -eq 'Right'){264}else{80};Click-Popup 'Codex Badge Menu' $x 92
     }
     CreditHover {

@@ -21,7 +21,7 @@ static CLASS_ID: AtomicUsize = AtomicUsize::new(0);
 pub enum TrayAction {
     Startup,
     Topmost,
-    Notifications,
+    ExpiringReset,
     CheckUpdate,
     Exit,
 }
@@ -30,7 +30,8 @@ pub enum TrayAction {
 pub(crate) struct Checks {
     pub startup: AtomicBool,
     pub topmost: AtomicBool,
-    pub notifications: AtomicBool,
+    pub expiring_reset: AtomicBool,
+    pub reset_details: Mutex<Vec<String>>,
     pub palette: AtomicUsize,
     pub update_available: AtomicBool,
 }
@@ -56,7 +57,7 @@ impl TrayHandle {
         &self,
         startup: bool,
         topmost: bool,
-        notifications: bool,
+        expiring_reset: bool,
         palette: usize,
         update_available: bool,
     ) {
@@ -64,8 +65,8 @@ impl TrayHandle {
         self.0.checks.topmost.store(topmost, Ordering::Relaxed);
         self.0
             .checks
-            .notifications
-            .store(notifications, Ordering::Relaxed);
+            .expiring_reset
+            .store(expiring_reset, Ordering::Relaxed);
         self.0.checks.palette.store(palette, Ordering::Relaxed);
         self.0
             .checks
@@ -79,6 +80,10 @@ impl TrayHandle {
                 LPARAM(0),
             );
         }
+    }
+
+    pub fn reset_details(&self, lines: Vec<String>) {
+        *self.0.checks.reset_details.lock().unwrap() = lines;
     }
 
     pub fn open(&self, point: (i32, i32), avoid: Option<crate::domain::Rect>, settings: bool) {
@@ -112,7 +117,7 @@ impl TrayHandle {
         let mut data = icon_data(HWND(self.0.hwnd as _));
         data.uFlags = NIF_INFO;
         data.dwInfoFlags = NIIF_INFO;
-        wide_copy(&mut data.szInfoTitle, "CodexBadge 额度提醒");
+        wide_copy(&mut data.szInfoTitle, "CodexBadge 临期用卡");
         wide_copy(&mut data.szInfo, message);
         if unsafe { Shell_NotifyIconW(NIM_MODIFY, &data) }.as_bool() {
             Ok(())

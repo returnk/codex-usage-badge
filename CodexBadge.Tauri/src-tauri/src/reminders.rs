@@ -42,7 +42,6 @@ struct CreditTracker {
     id: String,
     expires_at: i64,
     views: [u8; 2],
-    notified: [bool; 2],
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -153,32 +152,6 @@ impl ReminderTracker {
         *views += 1;
         true
     }
-
-    /// Only fresh successful observations while enabled can advance notification state.
-    /// Reset timestamps identify windows; wall-clock expiry never implies recovery.
-    pub fn observe(
-        &mut self,
-        snapshot: Option<&Snapshot>,
-        fresh: bool,
-        enabled: bool,
-        now: i64,
-    ) -> Option<String> {
-        let snapshot = snapshot.filter(|_| fresh && enabled)?;
-        self.credits.retain(|state| state.expires_at > now);
-        let mut events = Vec::new();
-        for credit in credit_candidates(snapshot, now) {
-            let state = self.credit_state(&credit);
-            if !state.notified[credit.stage] {
-                state.notified[credit.stage] = true;
-                events.push(credit_message(credit.expires_at.saturating_sub(now)));
-            }
-        }
-        if events.is_empty() {
-            None
-        } else {
-            Some(events.join("；"))
-        }
-    }
 }
 
 #[cfg(test)]
@@ -187,12 +160,11 @@ mod tests {
     use crate::domain::{QuotaWindow, ResetCredit};
 
     #[test]
-    fn quota_changes_never_create_dots_text_or_system_notifications() {
-        let mut tracker = ReminderTracker::default();
+    fn quota_changes_never_create_dots_or_text() {
+        let tracker = ReminderTracker::default();
         for value in [0.0, 9.0, 100.0] {
             let sample = snapshot(Some(value), Some(value), None);
             assert_eq!(tracker.hints(Some(&sample), true, 0, None).level, "none");
-            assert!(tracker.observe(Some(&sample), true, true, 0).is_none());
         }
     }
 
@@ -233,39 +205,9 @@ mod tests {
     }
 
     #[test]
-    fn windows_notifications_are_independent_of_views_and_skip_missed_stage() {
-        let mut tracker = ReminderTracker::default();
-        let credit = snapshot(Some(0.0), None, Some(48 * 3600));
-        let shown = tracker.credit_hint(Some(&credit), true, 0).unwrap();
-        tracker.viewed(&shown);
-        assert!(tracker.observe(Some(&credit), true, false, 0).is_none());
-        assert!(tracker.observe(Some(&credit), false, true, 0).is_none());
-        assert!(tracker
-            .observe(Some(&credit), true, true, 0)
-            .unwrap()
-            .contains("48 小时"));
-        assert!(tracker.observe(Some(&credit), true, true, 0).is_none());
-        assert!(tracker
-            .observe(Some(&credit), true, true, 40 * 3600)
-            .unwrap()
-            .contains("8 小时"));
-        let mut tracker: ReminderTracker =
-            serde_json::from_str(&serde_json::to_string(&tracker).unwrap()).unwrap();
-        assert!(tracker
-            .observe(Some(&credit), true, true, 40 * 3600)
-            .is_none());
-        assert!(ReminderTracker::default()
-            .observe(Some(&credit), true, true, 40 * 3600)
-            .unwrap()
-            .contains("8 小时"));
-    }
-
-    #[test]
     fn five_hour_usage_alone_never_warns_or_notifies() {
         let low = snapshot(Some(0.0), None, None);
         assert_eq!(hints(Some(&low), true, 0).level, "none");
-        let mut tracker = ReminderTracker::default();
-        assert!(tracker.observe(Some(&low), true, true, 0).is_none());
     }
 
     #[test]

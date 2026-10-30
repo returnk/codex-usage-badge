@@ -19,6 +19,6 @@ test('selected uninstall data cleanup names only Tauri files in the shared direc
  const cleanup=source.slice(source.indexOf('; Delete app data if'),source.indexOf('!ifmacrodef NSIS_HOOK_POSTUNINSTALL'));
  assert.match(cleanup,/\$\{If\} \$DeleteAppDataCheckboxState = 1\s+\$\{AndIf\} \$UpdateMode <> 1/);
  const owned=[...cleanup.matchAll(/Delete "\$LOCALAPPDATA\\CodexBadge\\([^"\r\n]+)"/g)].map(match=>match[1]).sort();
- assert.deepEqual(owned,['tauri-diagnostics.log','tauri-diagnostics.log.old','tauri-settings.json','tauri-settings.json.tmp','tauri-update-notice.json','tauri-update-notice.json.tmp']);
+ assert.deepEqual(owned,['expiring-reset.json','expiring-reset.lock','expiring-reset.tmp','tauri-diagnostics.log','tauri-diagnostics.log.old','tauri-settings.json','tauri-settings.json.tmp','tauri-update-notice.json','tauri-update-notice.json.tmp']);
  assert.doesNotMatch(source,/RmDir[^\r\n]*[\\/]CodexBadge"|Delete[^\r\n]*[\\/]CodexBadge[\\/](?:\*|settings\.json)/i);
 });
