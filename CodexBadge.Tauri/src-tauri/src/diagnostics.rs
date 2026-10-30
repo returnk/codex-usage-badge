@@ -51,6 +51,7 @@ fn sanitize_event(event: &str) -> String {
             | "drag_start"
             | "drag_end"
             | "anchor_discover"
+            | "anchor_layout"
             | "lifecycle_start"
             | "lifecycle_release"
             | "app_server_start"
@@ -160,6 +161,10 @@ fn sanitize_event(event: &str) -> String {
                 | "baseline"
                 | "below_threshold"
                 | "duplicate_event"
+                | "avatar"
+                | "ready"
+                | "downloading"
+                | "installing"
                 | "confirmation_gap"
                 | "confirmation_changed"
                 | "save"
@@ -218,6 +223,7 @@ fn sanitize_event(event: &str) -> String {
                 | "snapshot_valid"
                 | "retain"
                 | "logger"
+                | "update_visible"
         ) && matches!(value, "true" | "false");
         let version = key == "version"
             && value.split('.').count() == 3
@@ -352,6 +358,16 @@ mod tests {
             sanitize_event("start version=0.3.4 reset_rules=2 version=SECRET_TOKEN"),
             "start version=0.3.4 reset_rules=2"
         );
+    }
+
+    #[test]
+    fn anchor_layout_keeps_geometry_and_categories_without_control_text() {
+        for state in ["ready", "downloading", "installing", "none"] {
+            assert_eq!(
+                sanitize_event(&format!("anchor_layout source=avatar target=(33,1275) update_visible=true state={state} name=PRIVATE_TEXT")),
+                format!("anchor_layout source=avatar target=(33,1275) update_visible=true state={state}")
+            );
+        }
     }
 
     #[test]

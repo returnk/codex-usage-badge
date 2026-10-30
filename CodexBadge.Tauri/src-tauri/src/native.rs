@@ -912,35 +912,54 @@ impl AnchorProbe {
                 column_rect.get_right() - column_rect.get_left(),
                 column_rect.get_bottom() - column_rect.get_top(),
             ));
-            let update = ["有可用更新", "Update available", "Updates available"]
-                .iter()
-                .find_map(|name| {
-                    let condition = automation
-                        .create_property_condition(
-                            UIProperty::Name,
-                            (*name).into(),
-                            Some(PropertyConditionFlags::IgnoreCase),
-                        )
-                        .ok()?;
-                    column
-                        .find_all(TreeScope::Descendants, &condition)
-                        .ok()?
-                        .into_iter()
-                        .find_map(|element| {
-                            if element.is_offscreen().unwrap_or(true)
-                                || element.get_control_type().ok() != Some(ControlType::Button)
-                            {
-                                return None;
-                            }
-                            let rect = element.get_bounding_rectangle().ok()?;
-                            (rect.get_left() >= column_rect.get_left()
-                                && rect.get_right() <= column_rect.get_right()
-                                && rect.get_bottom() <= avatar_rect.get_top()
-                                && rect.get_top() >= column_rect.get_top())
-                            .then_some(rect)
-                        })
-                });
-            let point = profile_anchor_with_update(avatar_rect, update, dpi(owner));
+            // The rail update action becomes a progress bar while downloading
+            // or installing, and its accessible name includes the percentage.
+            let update = (|| {
+                let button = automation
+                    .create_property_condition(
+                        UIProperty::ControlType,
+                        (ControlType::Button as i32).into(),
+                        None,
+                    )
+                    .ok()?;
+                let progress = automation
+                    .create_property_condition(
+                        UIProperty::ControlType,
+                        (ControlType::ProgressBar as i32).into(),
+                        None,
+                    )
+                    .ok()?;
+                let condition = automation.create_or_condition(button, progress).ok()?;
+                column
+                    .find_all(TreeScope::Descendants, &condition)
+                    .ok()?
+                    .into_iter()
+                    .find_map(|element| {
+                        if element.is_offscreen().unwrap_or(true) {
+                            return None;
+                        }
+                        let state = update_control_state(
+                            &element.get_name().ok()?,
+                            element.get_control_type().ok()?,
+                        )?;
+                        let rect = element.get_bounding_rectangle().ok()?;
+                        (rect.get_left() >= column_rect.get_left()
+                            && rect.get_right() <= column_rect.get_right()
+                            && rect.get_bottom() <= avatar_rect.get_top()
+                            && rect.get_top() >= column_rect.get_top())
+                        .then_some((rect, state))
+                    })
+            })();
+            let point = profile_anchor_with_update(avatar_rect, update.map(|u| u.0), dpi(owner));
+            if self.last_avatar_anchor.map(|s| s.point) != Some(point) {
+                crate::diagnostics::record(format!(
+                    "anchor_layout source=avatar target=({},{}) update_visible={} state={}",
+                    point.0,
+                    point.1,
+                    update.is_some(),
+                    update.map_or("none", |u| u.1)
+                ));
+            }
             self.last_avatar_anchor = Some(AvatarAnchorSnapshot {
                 frame,
                 avatar: avatar_rect,
@@ -976,6 +995,34 @@ impl AnchorProbe {
         self.cached = Some(element);
         Some(point)
     }
+}
+
+fn update_control_state(name: &str, kind: ControlType) -> Option<&'static str> {
+    let name = name.trim();
+    if kind == ControlType::Button {
+        return ["有可用更新", "Update available", "Updates available"]
+            .iter()
+            .any(|label| name.eq_ignore_ascii_case(label))
+            .then_some("ready");
+    }
+    if kind != ControlType::ProgressBar {
+        return None;
+    }
+    let name = name.to_ascii_lowercase();
+    if matches!(name.as_str(), "正在安装" | "installing") {
+        return Some("installing");
+    }
+    if matches!(name.as_str(), "正在下载" | "downloading") {
+        return Some("downloading");
+    }
+    let progress = name
+        .strip_prefix("正在下载 ")
+        .or_else(|| name.strip_prefix("downloading "))?
+        .strip_suffix('%')?;
+    (!progress.is_empty()
+        && progress.chars().all(|c| c.is_ascii_digit())
+        && progress.parse::<u8>().is_ok_and(|p| p <= 100))
+    .then_some("downloading")
 }
 
 fn profile_anchor_point(rect: uiautomation::types::Rect, _dpi: u32) -> (i32, i32) {
@@ -1185,6 +1232,42 @@ mod tests {
         }
     }
     #[test]
+    fn late_update_moves_default_capsule_clear_and_removal_restores_avatar_position() {
+        use uiautomation::types::Rect;
+        for dpi in [96, 120, 144, 168, 192] {
+            let px = |v| crate::domain::dip_to_px(v, dpi);
+            let avatar = Rect::new(px(16.0), px(900.0), px(52.0), px(936.0));
+            let update = Rect::new(px(16.0), px(856.0), px(52.0), px(892.0));
+            let settings = crate::domain::Settings::default();
+            let size = 28.0;
+            let frame = |update| {
+                crate::domain::avatar_capsule_frame(
+                    &settings,
+                    Some(profile_anchor_with_update(avatar, update, dpi)),
+                    dpi,
+                    size,
+                )
+                .unwrap()
+            };
+            let original = frame(None);
+            assert!(original.1 < update.get_bottom() && original.1 + original.3 > update.get_top());
+            let moved = frame(Some(update));
+            assert!(moved.1 + moved.3 < update.get_top(), "dpi={dpi}");
+            for (name, kind) in [
+                ("正在下载", ControlType::ProgressBar),
+                ("正在下载 0%", ControlType::ProgressBar),
+                ("正在下载 37%", ControlType::ProgressBar),
+                ("Downloading 100%", ControlType::ProgressBar),
+                ("正在安装", ControlType::ProgressBar),
+                ("有可用更新", ControlType::Button),
+            ] {
+                let detected = update_control_state(name, kind).map(|_| update);
+                assert_eq!(frame(detected), moved, "dpi={dpi} state={name}");
+            }
+            assert_eq!(frame(None), original);
+        }
+    }
+    #[test]
     fn odd_avatar_width_does_not_bias_the_badge_to_the_left_at_125_percent() {
         let point = profile_anchor_point(uiautomation::types::Rect::new(86, 1126, 131, 1171), 120);
         let frame = crate::domain::capsule_frame(
@@ -1230,6 +1313,36 @@ mod tests {
             uiautomation::types::Rect::new(393, 144, 2055, 1233),
         ] {
             assert!(!is_avatar_column(frame, 1.25, avatar, rect));
+        }
+    }
+
+    #[test]
+    fn update_controls_cover_download_progress_installation_and_ready_states() {
+        for (name, kind, expected) in [
+            ("有可用更新", ControlType::Button, "ready"),
+            ("Update available", ControlType::Button, "ready"),
+            ("Updates available", ControlType::Button, "ready"),
+            ("正在下载", ControlType::ProgressBar, "downloading"),
+            ("正在下载 0%", ControlType::ProgressBar, "downloading"),
+            ("正在下载 37%", ControlType::ProgressBar, "downloading"),
+            ("正在下载 100%", ControlType::ProgressBar, "downloading"),
+            ("Downloading", ControlType::ProgressBar, "downloading"),
+            ("Downloading 37%", ControlType::ProgressBar, "downloading"),
+            ("正在安装", ControlType::ProgressBar, "installing"),
+            ("Installing", ControlType::ProgressBar, "installing"),
+        ] {
+            assert_eq!(update_control_state(name, kind), Some(expected), "{name}");
+        }
+        for (name, kind) in [
+            ("有可用更新", ControlType::Text),
+            ("Downloading 37%", ControlType::Button),
+            ("Downloading report.pdf", ControlType::ProgressBar),
+            ("Downloading 101%", ControlType::ProgressBar),
+            ("Downloading -1%", ControlType::ProgressBar),
+            ("正在下载文件", ControlType::ProgressBar),
+            ("上传 37%", ControlType::ProgressBar),
+        ] {
+            assert_eq!(update_control_state(name, kind), None, "{name}");
         }
     }
 
@@ -1332,6 +1445,34 @@ mod tests {
             "owner={owner} anchor={point:?} capsule={rect:?} dpi={}",
             dpi(owner)
         );
+        let root = automation.element_from_handle(Handle::from(owner)).unwrap();
+        let condition = automation
+            .create_property_condition(
+                UIProperty::Name,
+                "有可用更新".into(),
+                Some(PropertyConditionFlags::IgnoreCase),
+            )
+            .unwrap();
+        for update in root.find_all(TreeScope::Descendants, &condition).unwrap() {
+            if update.is_offscreen().unwrap_or(true) {
+                continue;
+            }
+            let update = update.get_bounding_rectangle().unwrap();
+            // Independent host geometry, not a synthetic copy of the point
+            // calculation: the candidate must sit wholly above the real button.
+            assert!(
+                rect.1 + rect.3 <= update.get_top(),
+                "capsule overlaps real update button"
+            );
+            println!(
+                "update=({}, {}, {}, {}) gap={}",
+                update.get_left(),
+                update.get_top(),
+                update.get_right(),
+                update.get_bottom(),
+                update.get_top() - rect.1 - rect.3
+            );
+        }
     }
     #[test]
     fn webview_child_guard_catches_a_child_that_does_not_forward_activation() {

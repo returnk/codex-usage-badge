@@ -1,6 +1,6 @@
 # 余量 · Codex Badge — Tauri development
 
-当前产品实现：**Tauri 2 + Rust + 系统 WebView2**。当前本地版本为 **v0.3.5**，尚未上传；当前公开版本为 **v0.3.4**。下载与日常使用见[项目首页](../README.md)；本页面向开发者，记录构建、诊断与验证信息。
+当前产品实现：**Tauri 2 + Rust + 系统 WebView2**。当前本地版本为 **v0.3.6**，尚未上传；当前公开版本为 **v0.3.4**。下载与日常使用见[项目首页](../README.md)；本页面向开发者，记录构建、诊断与验证信息。
 
 Tauri 2 + Rust + system WebView2 implementation for Windows 10/11 x64. This directory is independent of the WPF source in `src/CodexBadge`.
 
@@ -11,7 +11,7 @@ Tauri 2 + Rust + system WebView2 implementation for Windows 10/11 x64. This dire
 - Maps `usedPercent` to remaining percent for 300-minute and 10080-minute windows. The reset count uses `availableCount`, including when expiry details are absent. Unknown count is shown as unknown, not zero; View is hidden without real unexpired details. Known details must be `available` and unexpired and are sorted by expiration. Expiry of a known row reduces the cached count until the next read. Failed refreshes visibly mark cached data as pending update.
 - Defaults to Glass, with a System theme that follows Windows light/dark appearance. The wheel switches themes. Normal mode uses a compact numeric circle; global mode uses a capsule with a small percent unit. Both modes support drag and double-click position reset.
 - Saves theme, normal anchor-relative DIP offset, independent global work-area position, startup preference, notifications and reminder deduplication state in `%LOCALAPPDATA%\CodexBadge\tauri-settings.json`. Capsule and tray share a native three-item menu: topmost, Settings submenu, and Exit. Settings contains launch at login and optional Windows notifications. Native menus and hints use premultiplied-alpha buffered rendering with UpdateLayeredWindow; no WebView cold creation is needed for tray menus.
-- Discovers the new ChatGPT navigation column through visible profile-menu controls and validates cached avatar/column geometry; the old Voice sidebar remains a compatibility path. Normal placement centers the 30x30 DIP frame above the avatar with a 10 DIP gap. Global placement uses a 72x34 DIP frame and independent saved position. Window changes remain nonactivating and work-area constrained.
+- Discovers the new ChatGPT navigation column through visible profile-menu controls and validates cached avatar/column geometry; the old Voice sidebar remains a compatibility path. Normal placement avoids the desktop update action in ready, downloading (including percentage) and installing states, even when its UIA role changes from button to progress bar. Without that action, it centers the 30x30 DIP frame above the avatar with a 10 DIP gap. Global placement uses a 72x34 DIP frame and independent saved position. Window changes remain nonactivating and work-area constrained.
 - All windows are nonactivating tool windows. Normally owned by Codex; **置顶模式** detaches them for global topmost behavior while Codex is running. Minimize hides normal mode and retains global mode. Closing Codex now hides the badge in both modes, stops app-server and destroys WebViews after a two-second window-recreation grace period. Only tray and a lightweight Rust watcher remain; reopening Codex recreates the badge automatically. WebViews are not created at login while Codex is absent. A tray menu is created on demand even while waiting.
 
 ## Build
