@@ -266,6 +266,16 @@ fn apply_reset_model(m: &mut crate::Model, mut view: expiring_reset::View, scope
     m.reset_scope = scope;
 }
 
+fn pause_reset_model(m: &mut crate::Model, reason: &str) {
+    // The last confirmed scope is retained only as a revocation handle. Sending
+    // still requires a new Sample and a matching on-disk permit, never this UI state.
+    m.reset_view.status = if m.reset_view.enabled {
+        format!("{reason}；既有授权暂停，点击可关闭")
+    } else {
+        format!("{reason}；未开启或暂无适用授权")
+    };
+}
+
 fn publish_reset(
     shared: &Shared,
     app: &AppHandle,
@@ -309,6 +319,9 @@ fn run_expiring_reset(
             if expiring_reset::authorize(&store, server, &sample, accepted, now())? {
                 shared.reset_background.store(true, Ordering::Release);
                 shared.reset_stopped.store(false, Ordering::Release);
+                let mut m = shared.inner.lock().unwrap();
+                m.reset_view.enabled = true;
+                m.reset_scope = Some(sample.scope.clone());
             }
             shared.reset_authorize.store(false, Ordering::Release);
         }
@@ -320,7 +333,7 @@ fn run_expiring_reset(
             now(),
         )?;
         if shared.reset_stopped.load(Ordering::Acquire) && view.enabled {
-            view.status = "本会话已停止；关闭未保存，请再次点击关闭".into();
+            view.status = "本会话已停止新兑换；既有授权保留，点击可关闭".into();
         }
         Ok((view, Some(sample.scope)))
     })();
@@ -335,12 +348,14 @@ fn run_expiring_reset(
                 shared.reset_stopped.store(true, Ordering::Release);
                 diagnostics::record("auto_reset_record_failed state=paused");
             }
-            let mut view = shared.inner.lock().unwrap().reset_view.clone();
-            let notify_fault = record_failed
-                && view.status != error
-                && shared.reset_background.load(Ordering::Acquire);
-            view.enabled = false;
-            view.status = error;
+            let (mut view, scope, notify_fault) = {
+                let mut m = shared.inner.lock().unwrap();
+                let notify_fault = record_failed
+                    && !m.reset_view.status.starts_with(&error)
+                    && shared.reset_background.load(Ordering::Acquire);
+                pause_reset_model(&mut m, &error);
+                (m.reset_view.clone(), m.reset_scope.clone(), notify_fault)
+            };
             view.background = shared.reset_background.load(Ordering::Acquire);
             if let Ok(background) = expiring_reset::Store::local().and_then(|s| s.background()) {
                 view.background = background;
@@ -348,7 +363,7 @@ fn run_expiring_reset(
             view.notification = notify_fault
                 .then(|| "自动用卡已暂停：执行记录无法安全读取或保存，请核查本地记录。".into());
             view.snapshot = None;
-            publish_reset(shared, app, view, None);
+            publish_reset(shared, app, view, scope);
         }
     }
 }
@@ -597,9 +612,7 @@ fn select_account(m: &mut crate::Model, identity: u64) {
 
 fn invalidate_account(shared: &Shared) {
     let mut m = shared.inner.lock().unwrap();
-    m.reset_view.enabled = false;
-    m.reset_view.status = "需登录或账号不匹配，自动用卡暂停".into();
-    m.reset_scope = None;
+    pause_reset_model(&mut m, "登录身份待核实");
     m.snapshot = None;
     m.plan_label = None;
     m.account_key = None;
@@ -629,9 +642,7 @@ fn fail(shared: &Shared, app: &AppHandle, error: &str) {
     {
         let mut m = shared.inner.lock().unwrap();
         m.quota_failed = true;
-        m.reset_view.enabled = false;
-        m.reset_view.status = "额度服务不可用，自动用卡暂停".into();
-        m.reset_scope = None;
+        pause_reset_model(&mut m, "额度服务不可用");
         m.settings.celebration_state.interrupt();
         #[cfg(not(test))]
         if crate::settings::save(&m.settings).is_err() {
@@ -713,6 +724,24 @@ pub(crate) fn live_readonly_sample() -> Result<(Option<String>, domain::Snapshot
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn transient_reset_failure_keeps_revocation_handle_but_account_switch_discards_it() {
+        let shared = Shared::default();
+        {
+            let mut model = shared.inner.lock().unwrap();
+            model.quota_account = Some(1);
+            model.reset_view.enabled = true;
+            model.reset_scope = Some("authorized-scope".into());
+        }
+        invalidate_account(&shared);
+        let mut model = shared.inner.lock().unwrap();
+        assert!(model.reset_view.enabled);
+        assert_eq!(model.reset_scope.as_deref(), Some("authorized-scope"));
+        assert!(model.reset_view.status.contains("点击可关闭"));
+        select_account(&mut model, 2);
+        assert!(!model.reset_view.enabled);
+        assert!(model.reset_scope.is_none());
+    }
     #[test]
     fn reset_send_gate_checks_stop_and_does_not_lock_during_reply() {
         let shared = Shared::default();

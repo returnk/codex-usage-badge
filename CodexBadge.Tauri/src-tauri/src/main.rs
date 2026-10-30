@@ -1746,11 +1746,20 @@ fn change_expiring_reset(shared: &Arc<Shared>, app: &AppHandle) {
         shared.reset_authorize.store(false, Ordering::Release);
         let result = scope
             .ok_or_else(|| "当前账号尚未确认".to_string())
-            .and_then(|scope| expiring_reset::Store::local()?.set_enabled(&scope, false));
+            .and_then(|scope| {
+                let store = expiring_reset::Store::local()?;
+                store.set_enabled(&scope, false)?;
+                store.background()
+            });
+        if let Ok(background) = &result {
+            shared
+                .reset_background
+                .store(*background, Ordering::Release);
+        }
         let mut m = shared.inner.lock().unwrap();
         m.reset_view.enabled = result.is_err();
         m.reset_view.status = match &result {
-            Ok(()) => "已关闭；此前未决请求需核查官方状态".into(),
+            Ok(_) => "已关闭；此前未决请求需核查官方状态".into(),
             Err(_) => "本会话已停止，关闭未保存；请稍后重试关闭".into(),
         };
         drop(m);
