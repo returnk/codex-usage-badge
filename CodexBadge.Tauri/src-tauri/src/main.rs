@@ -2009,6 +2009,7 @@ fn main() {
             .map_err(std::io::Error::other)?;
             {
                 let m = shared.inner.lock().unwrap();
+                native_tray.reset_details(m.reset_view.hint_lines());
                 native_tray.sync(
                     m.settings.start_with_windows,
                     m.settings.always_on_top,
