@@ -1,6 +1,6 @@
 # 余量 · Codex Badge — Tauri development
 
-当前产品实现：**Tauri 2 + Rust + 系统 WebView2**。当前本地版本为 **v0.3.7**，尚未上传；当前公开版本为 **v0.3.4**。下载与日常使用见[项目首页](../README.md)；本页面向开发者，记录构建、诊断与验证信息。
+当前产品实现：**Tauri 2 + Rust + 系统 WebView2**。当前本地版本为 **v0.3.5**，尚未上传；当前公开版本为 **v0.3.4**。下载与日常使用见[项目首页](../README.md)；本页面向开发者，记录构建、诊断与验证信息。
 
 Tauri 2 + Rust + system WebView2 implementation for Windows 10/11 x64. This directory is independent of the WPF source in `src/CodexBadge`.
 
@@ -14,7 +14,9 @@ Tauri 2 + Rust + system WebView2 implementation for Windows 10/11 x64. This dire
 - Discovers the new ChatGPT navigation column through visible profile-menu controls and validates cached avatar/column geometry; the old Voice sidebar remains a compatibility path. Normal placement avoids the desktop update action in ready, downloading (including percentage) and installing states, even when its UIA role changes from button to progress bar. Without that action, it centers the 30x30 DIP frame above the avatar with a 10 DIP gap. Global placement uses a 72x34 DIP frame and independent saved position. Window changes remain nonactivating and work-area constrained.
 - All windows are nonactivating tool windows. Normally owned by Codex; **置顶模式** detaches them for global topmost behavior while Codex is running. Minimize hides normal mode and retains global mode. Closing Codex hides the badge in both modes and destroys WebViews after a two-second window-recreation grace period. Without automatic-reset permission, app-server stops and only tray and a lightweight Rust watcher remain; with permission the same quota worker remains available without creating WebViews; reopening Codex recreates the badge automatically. WebViews are not created at login while Codex is absent. A tray menu is created on demand even while waiting.
 
-## 临期用卡（本地 v0.3.7）
+当前完整功能已统一版本号为 0.3.5。当前交付目录为 `artifacts/release-v0.3.5-unified/packages/`；较早的 `release-v0.3.5/` 和 0.3.6/0.3.7 均为历史本地构建，保留原包和记录，不再作为当前交付。
+
+## 临期用卡（本地 v0.3.5）
 
 默认关闭，升级不代表授权。在设置中点击“临期用卡”，只读取得当前 ChatGPT 账号后，通过默认选择“否”的对话框确认持续授权；保存成功才勾选。无需逐次确认，初版固定在卡到期前 30 分钟内按条件尝试。电脑正常运行、胶囊驻留即可，不要求 Codex 窗口打开；关机、休眠或退出时不执行，不安装额外服务或计划任务。
 
